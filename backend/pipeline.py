@@ -1,4 +1,3 @@
-# Deploy pipeline test
 import time
 from telegram_notifier import TelegramNotifier
 from datetime import datetime, timezone
