@@ -116,7 +116,7 @@ deploy   # stages, prompts for commit message, commits, pushes, triggers VM git 
 
 VM setup before running any script:
 ```bash
-cd ~/stock-research && source venv/bin/activate
+cd ~/stock-research && source backend/venv/bin/activate
 ```
 
 ---

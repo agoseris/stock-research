@@ -1,15 +1,18 @@
 import time
 from telegram_notifier import TelegramNotifier
 from datetime import datetime, timezone
-from typing import List, Tuple
-from abstractions import Announcement
+from typing import List, Optional, Tuple
+from abstractions import Announcement, StorageProviderBase, UniverseStorageProviderBase
 from google_news_connector import GoogleNewsRSSProvider
 from companies_house_connector import CompaniesHouseProvider
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
-from abstractions import StorageProviderBase
 from storage_firestore import FirestoreProvider
-from universe import get_active_companies, get_tickers
+
+# universe.py is retained as a static fallback during the transition to
+# the dynamic Firestore-backed universe. It is only used if Firestore
+# returns an empty universe at startup.
+from universe import get_active_companies as _static_get_active_companies
 
 class AnalysisPipeline:
     """
@@ -27,7 +30,11 @@ class AnalysisPipeline:
     through implicit system behaviour.
     """
 
-    def __init__(self, storage: StorageProviderBase = None):
+    def __init__(
+        self,
+        storage: StorageProviderBase = None,
+        universe_storage: Optional[UniverseStorageProviderBase] = None,
+    ):
         self.providers = [
             GoogleNewsRSSProvider(),
             CompaniesHouseProvider(),
@@ -39,10 +46,59 @@ class AnalysisPipeline:
         self.notifier = TelegramNotifier()
         self.storage = storage or FirestoreProvider()
 
+        # Load the active universe at startup.
+        # Primary source: Firestore via UniverseStorageProviderBase.
+        # Fallback: static universe.py list (used during transition, or if
+        # the dynamic universe has not yet been populated).
+        self._universe: List[dict] = self._load_universe(universe_storage)
+
+    def _load_universe(
+        self, universe_storage: Optional[UniverseStorageProviderBase]
+    ) -> List[dict]:
+        """
+        Load the active company universe.
+
+        Attempts to read from Firestore via UniverseStorageProviderBase.
+        If universe_storage is not provided, or if Firestore returns an
+        empty list, falls back to the static universe.py list.
+
+        Returns a list of dicts with at least 'ticker' and 'name' keys,
+        compatible with the existing _is_in_universe() matching logic.
+        """
+        if universe_storage is not None:
+            try:
+                companies = universe_storage.get_universe()
+                if companies:
+                    # Convert UniverseCompany dataclasses to the dict shape
+                    # expected by _is_in_universe() (ticker + name).
+                    result = [
+                        {"ticker": c.ticker_lse, "name": c.company_name}
+                        for c in companies
+                    ]
+                    print(
+                        f"Universe loaded from Firestore: {len(result)} companies."
+                    )
+                    return result
+                else:
+                    print(
+                        "Universe storage returned empty list — "
+                        "falling back to static universe.py."
+                    )
+            except Exception as e:
+                print(
+                    f"Failed to load universe from Firestore ({e}) — "
+                    "falling back to static universe.py."
+                )
+
+        # Static fallback
+        static = _static_get_active_companies()
+        print(f"Using static universe: {len(static)} companies.")
+        return static
+
     def _is_in_universe(self, announcement: Announcement) -> bool:
         """Check if an announcement relates to a company in the universe."""
-        tickers = [t.upper() for t in get_tickers()]
-        names = [c["name"].lower() for c in get_active_companies()]
+        tickers = [c["ticker"].upper() for c in self._universe]
+        names = [c["name"].lower() for c in self._universe]
 
         # Match by ticker
         if announcement.ticker.upper() in tickers:
@@ -280,11 +336,14 @@ REASON: [one sentence]"""
 
 
 if __name__ == "__main__":
-    # Instantiate the concrete storage provider at the entry point and inject it.
-    # The pipeline depends only on StorageProviderBase — swapping storage
-    # backends requires changing only this line.
+    # Instantiate concrete providers at the entry point and inject them.
+    # The pipeline depends only on the abstract interfaces — swapping any
+    # backend requires changing only the lines below.
+    from storage_firestore_universe import FirestoreUniverseProvider
+
     storage = FirestoreProvider()
-    pipeline = AnalysisPipeline(storage=storage)
+    universe_storage = FirestoreUniverseProvider()
+    pipeline = AnalysisPipeline(storage=storage, universe_storage=universe_storage)
     signal_results, discovery_results = pipeline.run(max_announcements=30)
 
     # Surface any strong signals

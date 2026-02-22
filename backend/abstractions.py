@@ -1,7 +1,13 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import List, Optional
+
+try:
+    import pandas as pd
+    DataFrame = pd.DataFrame
+except ImportError:  # pragma: no cover — pandas always present on VM
+    DataFrame = object
 
 
 @dataclass
@@ -136,4 +142,186 @@ class StrategyLensBase(ABC):
     @abstractmethod
     def build_prompt(self, announcement: Announcement) -> str:
         """Returns a structured prompt for the LLM analysis layer."""
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Dataclasses for the universe pipeline (Abstractions 6 and 7)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class UniverseCompany:
+    """
+    A single company in the monitored universe.
+
+    Populated by the universe pipeline from FTSE Russell PDF constituent
+    lists, enriched with market data from MarketDataProviderBase, and
+    persisted via UniverseStorageProviderBase.
+
+    Fields marked Optional may be None when yfinance returns incomplete
+    data — these are flagged DATA_QUALITY by the pipeline.
+    """
+    ticker_lse: str                        # Native LSE ticker, e.g. SDY
+    ticker_yahoo: str                      # Yahoo Finance format, e.g. SDY.L
+    company_name: str                      # Legal name from FTSE Russell PDF
+    tier: int                              # 1 = FTSE Small Cap; 2 = Growth Trajectory
+    listing_exchange: str                  # LSE_MAIN or AIM
+    entity_type: str                       # OPERATING, REIT, SPAC, ROYALTY, NO_REVENUE, DATA_QUALITY
+    liquidity_flag: str                    # LIQUID, MODERATE, ILLIQUID
+    universe_added_date: date              # Date first included in the universe
+    last_refreshed: datetime               # Timestamp of the pipeline run that wrote this record
+
+    isin: Optional[str] = None
+    market_cap_gbp: Optional[float] = None
+    revenue_ttm: Optional[float] = None
+    revenue_growth_yoy: Optional[float] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    adtv_gbp: Optional[float] = None
+    last_price: Optional[float] = None
+    last_price_date: Optional[date] = None
+    fifty_two_week_high: Optional[float] = None
+    fifty_two_week_low: Optional[float] = None
+
+
+@dataclass
+class RefreshLog:
+    """
+    A record of a single universe pipeline refresh run.
+
+    Written to universe_refresh_log by FirestoreUniverseProvider
+    after each completed (or failed) run. Supports health metrics
+    and the DATA_QUALITY upgrade trigger defined in the brief.
+    """
+    run_id: str                  # Unique identifier for this run (ISO timestamp)
+    run_timestamp: datetime      # UTC timestamp when the run started
+    tier1_count: int             # Number of companies admitted to Tier 1
+    tier2_count: int             # Number of companies admitted to Tier 2
+    data_quality_count: int      # Number of records flagged DATA_QUALITY
+    lower_bound_gbp: float       # Dynamic lower bound computed from smallest Tier 1 market cap
+    success: bool                # True if both tiers completed and universe was written
+    errors: List[str] = field(default_factory=list)  # Error messages if success is False
+
+
+# ---------------------------------------------------------------------------
+# Abstraction 6 — Market Data Provider
+# ---------------------------------------------------------------------------
+
+class MarketDataProviderBase(ABC):
+    """
+    Abstract base for all market data providers.
+
+    The PoC implementation is YFinanceProvider (market_data_yfinance.py).
+    Swap to EODHD or any other source by implementing this interface —
+    the pipeline and universe storage layers are unaffected.
+
+    Rate limiting and retry logic are the responsibility of the concrete
+    implementation, not the pipeline that calls it.
+    """
+
+    @abstractmethod
+    def get_info(self, ticker_yahoo: str) -> dict:
+        """
+        Return a dict of market data fields for the given ticker.
+
+        The dict should include (where available):
+          marketCap, totalRevenue, revenueGrowth, sector, industry,
+          averageVolume, currentPrice, fiftyTwoWeekHigh, fiftyTwoWeekLow,
+          trailingPE, trailingEps, isin.
+
+        Returns an empty dict if the ticker is not found or data is
+        unavailable. Never raises — errors are absorbed by the implementation.
+        """
+        pass
+
+    @abstractmethod
+    def get_price_history(self, ticker_yahoo: str, period: str) -> DataFrame:
+        """
+        Return OHLCV price history for the given ticker and period.
+
+        period follows yfinance conventions: '1y', '2y', '5y', 'max', etc.
+
+        Returns an empty DataFrame if data is unavailable.
+        Never raises — errors are absorbed by the implementation.
+        """
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Abstraction 7 — Universe Storage Provider
+# ---------------------------------------------------------------------------
+
+class UniverseStorageProviderBase(ABC):
+    """
+    Abstract base for universe storage backends.
+
+    Manages two conceptually distinct datasets:
+      1. The universe itself — a list of UniverseCompany records, one per
+         company, overwritten on each quarterly refresh.
+      2. The refresh log — an append-only record of each pipeline run.
+
+    Distinct from StorageProviderBase, which is oriented around announcement
+    deduplication and signal/discovery results. The universe is a slowly-
+    changing reference dataset and warrants its own abstraction.
+
+    The PoC implementation is FirestoreUniverseProvider
+    (storage_firestore_universe.py).
+
+    All write methods are non-blocking best-effort — a storage failure
+    must never crash the pipeline. Implementations must absorb exceptions
+    and log them to stdout.
+    """
+
+    @abstractmethod
+    def save_universe(self, companies: List[UniverseCompany]) -> None:
+        """
+        Persist the full universe, overwriting any previous snapshot.
+
+        Called once per successful pipeline run after both tiers are
+        built. Must not be called with partial data — the caller is
+        responsible for ensuring completeness before calling this method.
+        """
+        pass
+
+    @abstractmethod
+    def get_universe(self, tier: Optional[int] = None) -> List[UniverseCompany]:
+        """
+        Retrieve the current universe.
+
+        If tier is provided, return only companies belonging to that tier.
+        If tier is None, return all companies.
+
+        Returns an empty list if the universe has not yet been populated
+        or if storage is unavailable.
+        """
+        pass
+
+    @abstractmethod
+    def get_company(self, ticker_lse: str) -> Optional[UniverseCompany]:
+        """
+        Retrieve a single company by its LSE ticker.
+
+        Returns None if the company is not in the universe or if storage
+        is unavailable.
+        """
+        pass
+
+    @abstractmethod
+    def save_refresh_log(self, log: RefreshLog) -> None:
+        """
+        Append a refresh log entry.
+
+        Called after every pipeline run — both successful and failed runs
+        should be logged so that health metrics can be tracked over time.
+        """
+        pass
+
+    @abstractmethod
+    def get_last_refresh_log(self) -> Optional[RefreshLog]:
+        """
+        Retrieve the most recent refresh log entry.
+
+        Returns None if no runs have been logged yet or if storage is
+        unavailable.
+        """
         pass
