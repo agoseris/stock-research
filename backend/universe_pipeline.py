@@ -105,11 +105,6 @@ _REQUEST_HEADERS = {
 }
 
 # pdfplumber table settings for text-aligned columns.
-# FTSE Russell constituent PDFs use whitespace-separated columns with no
-# ruled borders. The default extract_table() strategy looks for explicit
-# lines/boxes — it finds almost nothing. Setting both strategies to "text"
-# makes pdfplumber detect column boundaries from the x-positions of the
-# text itself, which is how these PDFs are actually laid out.
 _TEXT_TABLE_SETTINGS = {
     "vertical_strategy": "text",
     "horizontal_strategy": "text",
@@ -118,6 +113,34 @@ _TEXT_TABLE_SETTINGS = {
     "min_words_vertical": 3,
     "min_words_horizontal": 1,
 }
+
+# Words that pass _looks_like_ticker() but are NOT LSE ticker symbols.
+# These appear in PDF headers, footers, column labels, legal suffixes, and
+# common financial abbreviations. Filtering them out before column detection
+# prevents false positives from polluting the ticker column clusters.
+TICKER_STOPLIST = frozenset([
+    # Document / publisher words
+    "FTSE", "INDEX", "WEIGHT", "SECTOR", "NAME", "ISIN", "SEDOL",
+    "ICB", "RIC", "DATE", "PAGE", "TOTAL", "COUNT", "RANK", "TYPE",
+    "CODE", "NOTE", "SEE", "REF",
+    # Legal entity suffixes
+    "PLC", "LTD", "LLC", "INC", "CORP", "CO", "SA", "AG", "NV",
+    "SE", "SCA", "PTE", "PTY",
+    # Financial / market abbreviations
+    "ETF", "REIT", "NAV", "AUM", "EPS", "PE", "ROE", "ROA",
+    "AIM", "LSE", "LON", "GBP", "GBX", "USD", "EUR", "GBX",
+    # Geographic
+    "UK", "US", "EU", "GB", "UN", "UAE",
+    # Common English uppercase words found in financial PDFs
+    "THE", "AND", "FOR", "BUT", "NOT", "ARE", "WAS", "HAS", "ITS",
+    "NEW", "OLD", "ALL", "TOP", "BIG", "NET", "KEY",
+    # Month abbreviations
+    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+    # Words commonly found in FTSE Russell factsheet text
+    "UNITED", "GLOBAL", "GROUP", "TRUST", "FUND", "WORLD",
+    "HOLD", "INTL", "INT", "MGMT", "TECH", "PART",
+])
 
 
 # ---------------------------------------------------------------------------
@@ -163,103 +186,157 @@ def _download_pdf(url: str, label: str) -> bytes:
 # ---------------------------------------------------------------------------
 
 def _looks_like_ticker(text: str) -> bool:
-    """True if text looks like an LSE ticker symbol (2-6 uppercase alphanumeric)."""
+    """
+    True if text looks like an LSE ticker symbol.
+
+    Accepts 2-6 uppercase alphanumeric strings starting with a letter.
+    Also accepts Yahoo-format tickers with .L suffix (e.g. SDY.L) —
+    the .L is stripped before returning from the extraction functions.
+    Does NOT check TICKER_STOPLIST — callers do that.
+    """
+    t = text.rstrip(".L") if text.endswith(".L") else text
     return (
-        2 <= len(text) <= 6
-        and text.replace(".", "").isalnum()
-        and text[0].isalpha()
-        and text == text.upper()
-        and not text.replace(".", "").isdigit()
+        2 <= len(t) <= 6
+        and t.isalnum()
+        and t[0].isalpha()
+        and t == t.upper()
+        and not t.isdigit()
     )
 
 
 def _looks_like_number(text: str) -> bool:
-    """True if text is a number or percentage (index weight, SEDOL digit, etc.)."""
+    """True if text is a number or percentage (index weight, SEDOL, etc.)."""
     return bool(re.match(r'^[\d,\.%\-]+$', text))
 
 
-def _parse_rows_for_tickers(rows: list) -> List[Tuple[str, str]]:
-    """
-    Convert a list of table rows (each a list of cell strings) into
-    (ticker, company_name) pairs.
+def _normalise_ticker(text: str) -> str:
+    """Return the bare LSE ticker, stripping any .L suffix."""
+    return text.upper().removesuffix(".L")
 
-    Searches each row for a ticker-like cell and takes the longest
-    adjacent non-numeric cell as the company name. This is column-order
-    agnostic — it works whether the ticker is first or the name is first.
+
+def _extract_by_column_detection(all_words: list) -> List[Tuple[str, str]]:
     """
+    Primary extraction strategy for FTSE Russell constituent PDFs.
+
+    FTSE Russell factsheets use a multi-column layout (typically 2 constituent
+    entries per visual row) with no ruled table borders. Standard table-based
+    extraction fails because it finds no cell boundaries.
+
+    This strategy:
+      1. Collects all words with their x/y positions from every page.
+      2. Filters to ticker-like words, excluding TICKER_STOPLIST.
+      3. Clusters those words by x-position to find the ticker column(s).
+         Real tickers appear consistently in 1-2 columns; noise words
+         (FTSE, UK, PLC) appear at scattered x-positions and don't form
+         a column cluster.
+      4. Extracts only tickers from the identified column x-positions.
+      5. For each ticker, reconstructs the company name from adjacent words
+         in the same row (the words immediately to the left of the ticker,
+         or to the right if nothing is to the left).
+
+    Returns (ticker_lse, company_name) pairs.
+    """
+    from collections import Counter
+
+    if not all_words:
+        return []
+
+    # Find all ticker-like words, excluding stop-list
+    ticker_candidates = [
+        w for w in all_words
+        if _looks_like_ticker(w["text"]) and w["text"] not in TICKER_STOPLIST
+    ]
+
+    if len(ticker_candidates) < 5:
+        return []
+
+    # Cluster by x-position (rounded to nearest 10 points) to find columns
+    x_counts = Counter(round(w["x0"] / 10) * 10 for w in ticker_candidates)
+
+    # A valid ticker column has at least 5% of all ticker candidates, or at
+    # least 10 tickers — whichever is larger. This threshold filters out
+    # scattered noise words that happen to look like tickers.
+    threshold = max(10, len(ticker_candidates) * 0.05)
+    valid_x = {x for x, count in x_counts.items() if count >= threshold}
+
+    if not valid_x:
+        # No strong column signal — accept all candidates and rely solely
+        # on the stop-list for filtering
+        valid_x = set(x_counts.keys())
+
+    # Group all words by approximate row (same y within 2 points)
+    row_map: dict = {}
+    for w in all_words:
+        y_key = round(w["top"] / 2)
+        row_map.setdefault(y_key, []).append(w)
+
     results = []
     seen: Set[str] = set()
 
-    for row in rows:
-        if not row:
-            continue
-        cells = [(cell or "").strip() for cell in row]
+    for y_key in sorted(row_map.keys()):
+        row_words = sorted(row_map[y_key], key=lambda w: w["x0"])
 
-        ticker = None
-        name = None
-        for i, cell in enumerate(cells):
-            if _looks_like_ticker(cell):
-                ticker = cell.upper()
-                # Name: longest adjacent cell that isn't a number or ticker
-                candidates = [
-                    cells[j] for j in range(len(cells))
-                    if j != i
-                    and cells[j]
-                    and not _looks_like_number(cells[j])
-                    and not _looks_like_ticker(cells[j])
-                    and len(cells[j]) > 2
-                ]
-                if candidates:
-                    name = max(candidates, key=len)
-                break
+        # Find all tickers in this row that sit in a valid column
+        row_tickers = [
+            (i, w) for i, w in enumerate(row_words)
+            if (round(w["x0"] / 10) * 10 in valid_x
+                and _looks_like_ticker(w["text"])
+                and w["text"] not in TICKER_STOPLIST)
+        ]
 
-        if ticker and name and ticker not in seen:
-            seen.add(ticker)
-            results.append((ticker, name))
+        for rank, (ti, ticker_word) in enumerate(row_tickers):
+            ticker = _normalise_ticker(ticker_word["text"])
+            if ticker in seen:
+                continue
+
+            # Left boundary: end x of the previous ticker in this row
+            left_x = 0.0
+            if rank > 0:
+                _, prev = row_tickers[rank - 1]
+                left_x = prev["x1"]
+
+            # Collect name words: between left_x and the ticker's x0
+            name_parts = []
+            for w in row_words[:ti]:
+                if w["x0"] < left_x:
+                    continue
+                t = w["text"].strip()
+                if not t or _looks_like_number(t) or t in TICKER_STOPLIST:
+                    continue
+                name_parts.append(t)
+
+            # Fallback: look to the right of the ticker for the name
+            if not name_parts:
+                for w in row_words[ti + 1:]:
+                    t = w["text"].strip()
+                    if not t:
+                        continue
+                    if _looks_like_number(t) or "%" in t:
+                        break
+                    if round(w["x0"] / 10) * 10 in valid_x:
+                        break  # hit the next ticker column
+                    if t not in TICKER_STOPLIST:
+                        name_parts.append(t)
+
+            name = " ".join(name_parts).strip()
+            if name and len(name) > 2:
+                seen.add(ticker)
+                results.append((ticker, name))
 
     return results
 
 
-def _words_to_ticker_name_pairs(words: list) -> List[Tuple[str, str]]:
-    """
-    Extract (ticker, name) pairs from a flat list of pdfplumber word dicts.
-
-    Used as a last-resort fallback when extract_table() yields too few rows.
-    Groups words by y-coordinate (same row), then applies _parse_rows_for_tickers.
-    """
-    if not words:
-        return []
-
-    # Group words into rows by approximate y-position (within 2 points)
-    row_map: dict = {}
-    for word in words:
-        y_key = round(word["top"] / 2)
-        row_map.setdefault(y_key, []).append(word)
-
-    rows = []
-    for y_key in sorted(row_map.keys()):
-        row_words = sorted(row_map[y_key], key=lambda w: w["x0"])
-        rows.append([w["text"] for w in row_words])
-
-    return _parse_rows_for_tickers(rows)
-
-
 def _extract_tickers_from_pdf(pdf_bytes: bytes, label: str) -> List[Tuple[str, str]]:
     """
-    Extract (ticker, company_name) pairs from a FTSE Russell constituent PDF.
+    Extract (ticker_lse, company_name) pairs from a FTSE Russell constituent PDF.
 
-    Uses a three-strategy cascade, stopping at the first strategy that
-    yields enough rows:
+    Strategy cascade (stops at first strategy yielding >= 10 pairs):
+      1. Column detection — primary strategy for FTSE Russell's multi-column,
+         no-border layout. Identifies the ticker column by x-position clustering.
+      2. Text-aligned table — pdfplumber with vertical_strategy='text'.
+      3. Default ruled-border table — fallback for bordered PDFs.
 
-      1. extract_table() with text-alignment strategies — works for FTSE
-         Russell PDFs which use whitespace columns, not ruled borders.
-      2. extract_table() with default settings — fallback for PDFs that do
-         have ruled lines.
-      3. extract_words() with row-position grouping — last resort for PDFs
-         where neither table strategy finds structure.
-
-    Raises RuntimeError if pdfplumber is not available or all strategies
-    yield fewer than 10 pairs (indicating a fundamental format change).
+    Raises RuntimeError if pdfplumber is unavailable or all strategies fail.
     """
     try:
         import pdfplumber
@@ -272,7 +349,21 @@ def _extract_tickers_from_pdf(pdf_bytes: bytes, label: str) -> List[Tuple[str, s
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
 
-            # --- Strategy 1: text-aligned table detection ---
+            # Collect all words once — shared by strategies 1 and 3
+            all_words: list = []
+            for page in pdf.pages:
+                words = page.extract_words()
+                if words:
+                    all_words.extend(words)
+
+            # --- Strategy 1: column detection (primary) ---
+            results = _extract_by_column_detection(all_words)
+            if len(results) >= 10:
+                print(f"  {label}: {len(results)} tickers extracted "
+                      f"(strategy: column detection).")
+                return results
+
+            # --- Strategy 2: text-aligned table ---
             rows_text: list = []
             for page in pdf.pages:
                 try:
@@ -288,7 +379,7 @@ def _extract_tickers_from_pdf(pdf_bytes: bytes, label: str) -> List[Tuple[str, s
                       f"(strategy: text-aligned table).")
                 return results
 
-            # --- Strategy 2: default ruled-border table detection ---
+            # --- Strategy 3: default ruled-border table ---
             rows_default: list = []
             for page in pdf.pages:
                 table = page.extract_table()
@@ -301,19 +392,6 @@ def _extract_tickers_from_pdf(pdf_bytes: bytes, label: str) -> List[Tuple[str, s
                       f"(strategy: default table).")
                 return results
 
-            # --- Strategy 3: word-position grouping ---
-            all_words: list = []
-            for page in pdf.pages:
-                words = page.extract_words()
-                if words:
-                    all_words.extend(words)
-
-            results = _words_to_ticker_name_pairs(all_words)
-            if len(results) >= 10:
-                print(f"  {label}: {len(results)} tickers extracted "
-                      f"(strategy: word positions).")
-                return results
-
     except Exception as e:
         raise RuntimeError(f"pdfplumber extraction failed for {label}: {e}") from e
 
@@ -322,6 +400,44 @@ def _extract_tickers_from_pdf(pdf_bytes: bytes, label: str) -> List[Tuple[str, s
         f"(got {len(results)}). PDF format may have changed — "
         "manual inspection required."
     )
+
+
+def _parse_rows_for_tickers(rows: list) -> List[Tuple[str, str]]:
+    """
+    Fallback: convert table rows into (ticker, company_name) pairs.
+    Used by the text-aligned and default table strategies.
+    Finds ALL tickers per row (handles 2-up layouts).
+    """
+    results = []
+    seen: Set[str] = set()
+
+    for row in rows:
+        if not row:
+            continue
+        cells = [(cell or "").strip() for cell in row]
+
+        for i, cell in enumerate(cells):
+            if not _looks_like_ticker(cell) or cell in TICKER_STOPLIST:
+                continue
+            ticker = _normalise_ticker(cell)
+            if ticker in seen:
+                continue
+            # Name: longest adjacent cell that isn't a number, ticker, or stoplist word
+            candidates = [
+                cells[j] for j in range(len(cells))
+                if j != i
+                and cells[j]
+                and not _looks_like_number(cells[j])
+                and not _looks_like_ticker(cells[j])
+                and cells[j] not in TICKER_STOPLIST
+                and len(cells[j]) > 2
+            ]
+            if candidates:
+                name = max(candidates, key=len)
+                seen.add(ticker)
+                results.append((ticker, name))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +671,19 @@ class UniversePipeline:
         asx_bytes = _download_pdf(FTSE_ASX_URL, "ASX")
         asx_pairs = _extract_tickers_from_pdf(asx_bytes, "ASX")
 
-        axx_bytes = _download_pdf(FTSE_AXX_URL, "AXX")
-        axx_pairs = _extract_tickers_from_pdf(axx_bytes, "AXX")
+        # AXX (AIM All-Share) is non-fatal: FTSE Russell's AXX factsheet URL
+        # does not always return a PDF (it may return HTML depending on region,
+        # session, or URL changes). If it fails, Tier 2 proceeds with LSE Main
+        # Market companies only and logs a clear warning. AIM coverage can be
+        # restored once the correct URL or access method is confirmed.
+        try:
+            axx_bytes = _download_pdf(FTSE_AXX_URL, "AXX")
+            axx_pairs = _extract_tickers_from_pdf(axx_bytes, "AXX")
+        except RuntimeError as e:
+            print(f"\n  WARNING: AIM All-Share (AXX) unavailable: {e}")
+            print("  Tier 2 will include LSE Main Market (ASX) only.")
+            print("  AIM companies excluded from this refresh.")
+            axx_pairs = []
 
         # Build (ticker → (name, exchange)) map; ASX tickers are LSE_MAIN,
         # AXX tickers are AIM. Merge and deduplicate; ASX takes precedence
