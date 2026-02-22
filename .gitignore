@@ -1,0 +1,18 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment & secrets
+.env
+gcp-credentials.json
+*credentials*.json
+
+# Scratch files
+*.save
+
+# Data (optional - remove if you want these in git)
+# *.xlsx
+# *.csv
