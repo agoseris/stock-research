@@ -130,7 +130,7 @@ TICKER_STOPLIST = frozenset([
     "ETF", "REIT", "NAV", "AUM", "EPS", "PE", "ROE", "ROA",
     "AIM", "LSE", "LON", "GBP", "GBX", "USD", "EUR", "GBX",
     # Geographic
-    "UK", "US", "EU", "GB", "UN", "UAE",
+    "UK", "US", "EU", "GB", "UN", "UAE", "KINGDOM",
     # Common English uppercase words found in financial PDFs
     "THE", "AND", "FOR", "BUT", "NOT", "ARE", "WAS", "HAS", "ITS",
     "NEW", "OLD", "ALL", "TOP", "BIG", "NET", "KEY",
@@ -194,7 +194,7 @@ def _looks_like_ticker(text: str) -> bool:
     the .L is stripped before returning from the extraction functions.
     Does NOT check TICKER_STOPLIST — callers do that.
     """
-    t = text.rstrip(".L") if text.endswith(".L") else text
+    t = text[:-2] if text.endswith(".L") else text
     return (
         2 <= len(t) <= 6
         and t.isalnum()
@@ -250,13 +250,19 @@ def _extract_by_column_detection(all_words: list) -> List[Tuple[str, str]]:
     if len(ticker_candidates) < 5:
         return []
 
-    # Cluster by x-position (rounded to nearest 10 points) to find columns
-    x_counts = Counter(round(w["x0"] / 10) * 10 for w in ticker_candidates)
+    # Cluster by x-position (rounded to nearest 20 points) to find columns.
+    # 20-point bins prevent the real ticker column from being split across two
+    # adjacent bins when PDF rendering places tickers at slightly varying x
+    # values (e.g. 205 and 215 would land in different 10-pt bins but the same
+    # 20-pt bin).
+    x_counts = Counter(round(w["x0"] / 20) * 20 for w in ticker_candidates)
 
-    # A valid ticker column has at least 5% of all ticker candidates, or at
-    # least 10 tickers — whichever is larger. This threshold filters out
-    # scattered noise words that happen to look like tickers.
-    threshold = max(10, len(ticker_candidates) * 0.05)
+    # A valid ticker column has at least 4% of all ticker candidates, or at
+    # least 5 tickers — whichever is larger. The lower threshold (was 10/5%)
+    # ensures that a real ticker column with a moderate number of candidates
+    # is not excluded because noise words at a single x-position happen to
+    # outnumber it.
+    threshold = max(5, len(ticker_candidates) * 0.04)
     valid_x = {x for x, count in x_counts.items() if count >= threshold}
 
     if not valid_x:
@@ -264,10 +270,13 @@ def _extract_by_column_detection(all_words: list) -> List[Tuple[str, str]]:
         # on the stop-list for filtering
         valid_x = set(x_counts.keys())
 
-    # Group all words by approximate row (same y within 2 points)
+    # Group all words by approximate row (same y within ~8 points).
+    # Dividing by 4 gives a tolerance that handles normal PDF baseline
+    # variations within a row while keeping adjacent rows in separate buckets
+    # (typical line spacing is 12–14 pt, so rows ~3 buckets apart).
     row_map: dict = {}
     for w in all_words:
-        y_key = round(w["top"] / 2)
+        y_key = round(w["top"] / 4)
         row_map.setdefault(y_key, []).append(w)
 
     results = []
@@ -279,7 +288,7 @@ def _extract_by_column_detection(all_words: list) -> List[Tuple[str, str]]:
         # Find all tickers in this row that sit in a valid column
         row_tickers = [
             (i, w) for i, w in enumerate(row_words)
-            if (round(w["x0"] / 10) * 10 in valid_x
+            if (round(w["x0"] / 20) * 20 in valid_x
                 and _looks_like_ticker(w["text"])
                 and w["text"] not in TICKER_STOPLIST)
         ]
@@ -308,12 +317,14 @@ def _extract_by_column_detection(all_words: list) -> List[Tuple[str, str]]:
             # Fallback: look to the right of the ticker for the name
             if not name_parts:
                 for w in row_words[ti + 1:]:
+                    if len(name_parts) >= 8:
+                        break  # cap name length to avoid capturing metadata
                     t = w["text"].strip()
                     if not t:
                         continue
                     if _looks_like_number(t) or "%" in t:
                         break
-                    if round(w["x0"] / 10) * 10 in valid_x:
+                    if round(w["x0"] / 20) * 20 in valid_x:
                         break  # hit the next ticker column
                     if t not in TICKER_STOPLIST:
                         name_parts.append(t)

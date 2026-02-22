@@ -63,7 +63,7 @@ TICKER_STOPLIST = frozenset([
     "SE", "SCA", "PTE", "PTY",
     "ETF", "REIT", "NAV", "AUM", "EPS", "PE", "ROE", "ROA",
     "AIM", "LSE", "LON", "GBP", "GBX", "USD", "EUR",
-    "UK", "US", "EU", "GB", "UN", "UAE",
+    "UK", "US", "EU", "GB", "UN", "UAE", "KINGDOM",
     "THE", "AND", "FOR", "BUT", "NOT", "ARE", "WAS", "HAS", "ITS",
     "NEW", "OLD", "ALL", "TOP", "BIG", "NET", "KEY",
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -74,7 +74,7 @@ TICKER_STOPLIST = frozenset([
 
 
 def _looks_like_ticker(text: str) -> bool:
-    t = text.rstrip(".L") if text.endswith(".L") else text
+    t = text[:-2] if text.endswith(".L") else text
     return (
         2 <= len(t) <= 6
         and t.isalnum()
@@ -104,15 +104,15 @@ def _extract_by_column_detection(all_words: list) -> List[Tuple[str, str]]:
     if len(ticker_candidates) < 5:
         return []
 
-    x_counts = Counter(round(w["x0"] / 10) * 10 for w in ticker_candidates)
-    threshold = max(10, len(ticker_candidates) * 0.05)
+    x_counts = Counter(round(w["x0"] / 20) * 20 for w in ticker_candidates)
+    threshold = max(5, len(ticker_candidates) * 0.04)
     valid_x = {x for x, count in x_counts.items() if count >= threshold}
     if not valid_x:
         valid_x = set(x_counts.keys())
 
     row_map: dict = {}
     for w in all_words:
-        y_key = round(w["top"] / 2)
+        y_key = round(w["top"] / 4)
         row_map.setdefault(y_key, []).append(w)
 
     results = []
@@ -123,7 +123,7 @@ def _extract_by_column_detection(all_words: list) -> List[Tuple[str, str]]:
 
         row_tickers = [
             (i, w) for i, w in enumerate(row_words)
-            if (round(w["x0"] / 10) * 10 in valid_x
+            if (round(w["x0"] / 20) * 20 in valid_x
                 and _looks_like_ticker(w["text"])
                 and w["text"] not in TICKER_STOPLIST)
         ]
@@ -149,12 +149,14 @@ def _extract_by_column_detection(all_words: list) -> List[Tuple[str, str]]:
 
             if not name_parts:
                 for w in row_words[ti + 1:]:
+                    if len(name_parts) >= 8:
+                        break
                     t = w["text"].strip()
                     if not t:
                         continue
                     if _looks_like_number(t) or "%" in t:
                         break
-                    if round(w["x0"] / 10) * 10 in valid_x:
+                    if round(w["x0"] / 20) * 20 in valid_x:
                         break
                     if t not in TICKER_STOPLIST:
                         name_parts.append(t)
@@ -236,15 +238,30 @@ def run_test():
         ]
         filtered_candidates = [t for t in raw_ticker_candidates if t not in TICKER_STOPLIST]
         x_counts = Counter(
-            round(w["x0"] / 10) * 10 for w in all_words
+            round(w["x0"] / 20) * 20 for w in all_words
             if _looks_like_ticker(w["text"]) and w["text"] not in TICKER_STOPLIST
         )
-        threshold = max(10, len(filtered_candidates) * 0.05)
+        threshold = max(5, len(filtered_candidates) * 0.04)
         valid_x = {x for x, cnt in x_counts.items() if cnt >= threshold}
 
         print(f"  Raw ticker-shaped words:    {len(raw_ticker_candidates)}")
         print(f"  After stop-list filter:     {len(filtered_candidates)}")
+        print(f"  Column threshold:           {threshold:.1f}")
         print(f"  Ticker column x-positions:  {sorted(valid_x)}")
+
+        # Full x-position distribution (top 12, helps diagnose column detection)
+        print(f"  X-bin distribution (top 12 by count):")
+        for xb, cnt in sorted(x_counts.items(), key=lambda kv: -kv[1])[:12]:
+            marker = " ← qualifies" if cnt >= threshold else ""
+            print(f"    x={xb:5.0f}: {cnt:3d}{marker}")
+
+        # Word dump — first 80 words sorted by top/x0; marks ticker candidates
+        print(f"  First 80 words (top→x0 order):")
+        sorted_words = sorted(all_words, key=lambda w: (w["top"], w["x0"]))
+        for dw in sorted_words[:80]:
+            is_cand = _looks_like_ticker(dw["text"]) and dw["text"] not in TICKER_STOPLIST
+            marker = " ←" if is_cand else ""
+            print(f"    top={dw['top']:6.1f} x0={dw['x0']:6.1f} '{dw['text']}'{marker}")
 
         pairs = _extract_by_column_detection(all_words)
         print(f"  Ticker-name pairs found:    {len(pairs)}")
