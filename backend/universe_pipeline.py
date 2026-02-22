@@ -30,6 +30,7 @@ Run cadence: quarterly, aligned with FTSE Russell index rebalancing
 
 import io
 import os
+import re
 import time
 from datetime import date, datetime, timezone
 from typing import List, Optional, Set, Tuple
@@ -90,6 +91,34 @@ HTTP_TIMEOUT = 30
 # PDF download minimum size sanity check (bytes)
 PDF_MIN_SIZE_BYTES = 10_000
 
+# Browser-like headers for FTSE Russell downloads.
+# Without a real User-Agent, FTSE Russell returns an HTML bot-challenge
+# page instead of the PDF — this is what causes the AXX content-type failure.
+_REQUEST_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/pdf,application/octet-stream,*/*;q=0.9",
+    "Referer": "https://research.ftserussell.com/",
+}
+
+# pdfplumber table settings for text-aligned columns.
+# FTSE Russell constituent PDFs use whitespace-separated columns with no
+# ruled borders. The default extract_table() strategy looks for explicit
+# lines/boxes — it finds almost nothing. Setting both strategies to "text"
+# makes pdfplumber detect column boundaries from the x-positions of the
+# text itself, which is how these PDFs are actually laid out.
+_TEXT_TABLE_SETTINGS = {
+    "vertical_strategy": "text",
+    "horizontal_strategy": "text",
+    "snap_tolerance": 3,
+    "join_tolerance": 3,
+    "min_words_vertical": 3,
+    "min_words_horizontal": 1,
+}
+
 
 # ---------------------------------------------------------------------------
 # PDF download and extraction helpers
@@ -99,11 +128,15 @@ def _download_pdf(url: str, label: str) -> bytes:
     """
     Download a FTSE Russell constituent PDF and return raw bytes.
 
+    Browser-like headers are sent with every request. Without a real
+    User-Agent, FTSE Russell returns an HTML challenge page instead of
+    the PDF (the root cause of the AXX content-type failure in testing).
+
     Raises RuntimeError if the download fails or the response is not a PDF.
     """
     print(f"  Downloading {label}...")
     try:
-        resp = requests.get(url, timeout=HTTP_TIMEOUT)
+        resp = requests.get(url, headers=_REQUEST_HEADERS, timeout=HTTP_TIMEOUT)
         resp.raise_for_status()
     except requests.RequestException as e:
         raise RuntimeError(f"Failed to download {label}: {e}") from e
@@ -115,7 +148,6 @@ def _download_pdf(url: str, label: str) -> bytes:
             "likely not a valid PDF."
         )
 
-    # Validate PDF magic bytes
     if not content.startswith(b"%PDF"):
         raise RuntimeError(
             f"{label} response is not a PDF "
@@ -126,19 +158,108 @@ def _download_pdf(url: str, label: str) -> bytes:
     return content
 
 
+# ---------------------------------------------------------------------------
+# PDF extraction helpers
+# ---------------------------------------------------------------------------
+
+def _looks_like_ticker(text: str) -> bool:
+    """True if text looks like an LSE ticker symbol (2-6 uppercase alphanumeric)."""
+    return (
+        2 <= len(text) <= 6
+        and text.replace(".", "").isalnum()
+        and text[0].isalpha()
+        and text == text.upper()
+        and not text.replace(".", "").isdigit()
+    )
+
+
+def _looks_like_number(text: str) -> bool:
+    """True if text is a number or percentage (index weight, SEDOL digit, etc.)."""
+    return bool(re.match(r'^[\d,\.%\-]+$', text))
+
+
+def _parse_rows_for_tickers(rows: list) -> List[Tuple[str, str]]:
+    """
+    Convert a list of table rows (each a list of cell strings) into
+    (ticker, company_name) pairs.
+
+    Searches each row for a ticker-like cell and takes the longest
+    adjacent non-numeric cell as the company name. This is column-order
+    agnostic — it works whether the ticker is first or the name is first.
+    """
+    results = []
+    seen: Set[str] = set()
+
+    for row in rows:
+        if not row:
+            continue
+        cells = [(cell or "").strip() for cell in row]
+
+        ticker = None
+        name = None
+        for i, cell in enumerate(cells):
+            if _looks_like_ticker(cell):
+                ticker = cell.upper()
+                # Name: longest adjacent cell that isn't a number or ticker
+                candidates = [
+                    cells[j] for j in range(len(cells))
+                    if j != i
+                    and cells[j]
+                    and not _looks_like_number(cells[j])
+                    and not _looks_like_ticker(cells[j])
+                    and len(cells[j]) > 2
+                ]
+                if candidates:
+                    name = max(candidates, key=len)
+                break
+
+        if ticker and name and ticker not in seen:
+            seen.add(ticker)
+            results.append((ticker, name))
+
+    return results
+
+
+def _words_to_ticker_name_pairs(words: list) -> List[Tuple[str, str]]:
+    """
+    Extract (ticker, name) pairs from a flat list of pdfplumber word dicts.
+
+    Used as a last-resort fallback when extract_table() yields too few rows.
+    Groups words by y-coordinate (same row), then applies _parse_rows_for_tickers.
+    """
+    if not words:
+        return []
+
+    # Group words into rows by approximate y-position (within 2 points)
+    row_map: dict = {}
+    for word in words:
+        y_key = round(word["top"] / 2)
+        row_map.setdefault(y_key, []).append(word)
+
+    rows = []
+    for y_key in sorted(row_map.keys()):
+        row_words = sorted(row_map[y_key], key=lambda w: w["x0"])
+        rows.append([w["text"] for w in row_words])
+
+    return _parse_rows_for_tickers(rows)
+
+
 def _extract_tickers_from_pdf(pdf_bytes: bytes, label: str) -> List[Tuple[str, str]]:
     """
     Extract (ticker, company_name) pairs from a FTSE Russell constituent PDF.
 
-    FTSE Russell factsheets list constituents in a table. The ticker symbol
-    appears in a column labelled 'Constituent' or similar; company name in
-    an adjacent column. This function extracts all rows that look like
-    (SHORT_TICKER, Company Name) pairs.
+    Uses a three-strategy cascade, stopping at the first strategy that
+    yields enough rows:
 
-    Returns a list of (ticker_lse, company_name) tuples, uppercased ticker.
+      1. extract_table() with text-alignment strategies — works for FTSE
+         Russell PDFs which use whitespace columns, not ruled borders.
+      2. extract_table() with default settings — fallback for PDFs that do
+         have ruled lines.
+      3. extract_words() with row-position grouping — last resort for PDFs
+         where neither table strategy finds structure.
 
-    Raises RuntimeError if pdfplumber is not available or extraction fails
-    catastrophically (yields < 10 rows, which indicates a format change).
+    Raises RuntimeError if pdfplumber is not available or all strategies
+    yield fewer than 10 pairs (indicating a fundamental format change).
     """
     try:
         import pdfplumber
@@ -148,45 +269,59 @@ def _extract_tickers_from_pdf(pdf_bytes: bytes, label: str) -> List[Tuple[str, s
             "Install with: pip install pdfplumber"
         ) from e
 
-    rows = []
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+
+            # --- Strategy 1: text-aligned table detection ---
+            rows_text: list = []
+            for page in pdf.pages:
+                try:
+                    table = page.extract_table(table_settings=_TEXT_TABLE_SETTINGS)
+                    if table:
+                        rows_text.extend(table)
+                except Exception:
+                    pass
+
+            results = _parse_rows_for_tickers(rows_text)
+            if len(results) >= 10:
+                print(f"  {label}: {len(results)} tickers extracted "
+                      f"(strategy: text-aligned table).")
+                return results
+
+            # --- Strategy 2: default ruled-border table detection ---
+            rows_default: list = []
             for page in pdf.pages:
                 table = page.extract_table()
                 if table:
-                    rows.extend(table)
+                    rows_default.extend(table)
+
+            results = _parse_rows_for_tickers(rows_default)
+            if len(results) >= 10:
+                print(f"  {label}: {len(results)} tickers extracted "
+                      f"(strategy: default table).")
+                return results
+
+            # --- Strategy 3: word-position grouping ---
+            all_words: list = []
+            for page in pdf.pages:
+                words = page.extract_words()
+                if words:
+                    all_words.extend(words)
+
+            results = _words_to_ticker_name_pairs(all_words)
+            if len(results) >= 10:
+                print(f"  {label}: {len(results)} tickers extracted "
+                      f"(strategy: word positions).")
+                return results
+
     except Exception as e:
         raise RuntimeError(f"pdfplumber extraction failed for {label}: {e}") from e
 
-    if len(rows) < 10:
-        raise RuntimeError(
-            f"{label}: only {len(rows)} rows extracted — "
-            "PDF format may have changed. Manual inspection required."
-        )
-
-    results = []
-    for row in rows:
-        if not row or len(row) < 2:
-            continue
-        # Ticker is typically the first non-empty cell that is a short
-        # uppercase alphabetical string (1-5 chars, no spaces).
-        # Company name is the next non-empty cell.
-        ticker_candidate = (row[0] or "").strip()
-        name_candidate = (row[1] or "").strip()
-
-        if not ticker_candidate or not name_candidate:
-            continue
-        # Filter: ticker should be 1-6 uppercase letters/digits, no spaces
-        if (
-            1 <= len(ticker_candidate) <= 6
-            and ticker_candidate.replace(".", "").isalnum()
-            and ticker_candidate[0].isalpha()
-            and not ticker_candidate[0].isdigit()
-        ):
-            results.append((ticker_candidate.upper(), name_candidate))
-
-    print(f"  {label}: {len(results)} tickers extracted.")
-    return results
+    raise RuntimeError(
+        f"{label}: all extraction strategies yielded fewer than 10 pairs "
+        f"(got {len(results)}). PDF format may have changed — "
+        "manual inspection required."
+    )
 
 
 # ---------------------------------------------------------------------------
