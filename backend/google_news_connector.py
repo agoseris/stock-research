@@ -75,7 +75,15 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
         try:
             encoded = query.replace(" ", "+")
             url = self.BASE_URL.format(encoded)
-            resp = requests.get(url, timeout=_FETCH_TIMEOUT)
+            resp = requests.get(
+                url,
+                timeout=_FETCH_TIMEOUT,
+                headers={"User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/122.0.0.0 Safari/537.36"
+                )},
+            )
             resp.raise_for_status()
             feed = feedparser.parse(resp.text)
             return feed.entries[:max_items]
