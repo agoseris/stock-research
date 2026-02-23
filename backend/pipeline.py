@@ -32,7 +32,11 @@ class AnalysisPipeline:
         universe_storage: Optional[UniverseStorageProviderBase] = None,
     ):
         self.providers = [
-            GoogleNewsProvider(),
+            # GoogleNewsProvider(),  # Parked: GCP free trial blocks Custom Search JSON API.
+            #   Code intact in google_news_connector.py. Reactivate by:
+            #   1. Upgrading GCP account from free trial to standard (no immediate charge)
+            #   2. Adding GOOGLE_CSE_KEY and GOOGLE_CSE_ID to backend/.env
+            #   3. Uncommenting this line
             CompaniesHouseProvider(universe_storage=universe_storage),
         ]
         self.lenses = [
