@@ -93,9 +93,17 @@ def _read_csv(filepath: str, listing_exchange: str, tier: int) -> List[dict]:
     return companies
 
 
+MARKET_CAP_CEILING_GBP = 1_000_000_000  # £1B — consistent with brief Tier 2 upper bound
+
+
 def load_csv_universe() -> List[dict]:
     """
     Load all companies from the most recent AIM and FTSE All-Share CSVs.
+
+    Applies a £1B market cap ceiling: companies above this threshold are
+    excluded before import. This prevents large-cap FTSE 100/250 companies
+    from entering the signal queue and consuming unnecessary LLM calls.
+    Companies with no market cap data are retained (benefit of the doubt).
 
     Returns a merged, deduplicated list of company dicts. FTSE entries take
     precedence over AIM entries if the same ticker appears in both.
@@ -123,7 +131,20 @@ def load_csv_universe() -> List[dict]:
         for row in _read_csv(ftse_path, listing_exchange="LSE_MAIN", tier=1):
             rows[row["ticker"]] = row  # overwrites AIM entry if ticker appears in both
 
-    return list(rows.values())
+    # Apply £1B market cap ceiling
+    filtered = []
+    excluded = []
+    for row in rows.values():
+        mcap = row.get("market_cap_gbp")
+        if mcap is not None and mcap > MARKET_CAP_CEILING_GBP:
+            excluded.append(row["ticker"])
+        else:
+            filtered.append(row)
+
+    if excluded:
+        print(f"  Excluded (market cap > £1B): {len(excluded)}")
+
+    return filtered
 
 
 # ---------------------------------------------------------------------------
