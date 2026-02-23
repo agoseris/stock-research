@@ -65,7 +65,6 @@ class GoogleNewsProvider(AnnouncementProviderBase):
                     "key": self.api_key,
                     "cx": self.cse_id,
                     "q": query,
-                    "tbm": "nws",
                     "num": _MAX_PER_REQUEST,
                     "gl": "GB",
                     "hl": "en-GB",
