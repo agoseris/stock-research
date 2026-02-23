@@ -48,7 +48,9 @@ _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs
 
 # Minimum similarity score (0–1) to accept a CH name match.
 # Below this threshold the company is imported without a CH number.
-CH_CONFIDENCE_THRESHOLD = 0.6
+# Set to 0.85 — empirical testing showed 0.733 produced a false positive
+# (dissolved company matched to a live AIM stock).
+CH_CONFIDENCE_THRESHOLD = 0.85
 
 # Rate limit: 600 requests per 5 minutes = 2/sec. 0.6s sleep is comfortably
 # within limits and leaves headroom for other API callers on the same key.
@@ -106,6 +108,10 @@ def _lookup_ch_number(
     results against the CSV name, and returns the best match above
     CH_CONFIDENCE_THRESHOLD.
 
+    Only active companies are considered — dissolved, liquidated, or
+    struck-off entities are excluded to prevent false positives where a
+    defunct company name closely resembles a live AIM/FTSE stock.
+
     Returns (companies_house_number, confidence) or (None, 0.0) if no
     confident match is found or if the API call fails.
 
@@ -135,6 +141,9 @@ def _lookup_ch_number(
     best_score = 0.0
 
     for item in items:
+        # Skip dissolved, liquidated, or struck-off companies
+        if item.get("company_status", "active") != "active":
+            continue
         ch_name = item.get("title", "")
         score = _score_name_match(csv_name, ch_name)
         if score > best_score:
