@@ -30,10 +30,6 @@ import sys
 from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 # Path to docs/ relative to this file
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs")
 
