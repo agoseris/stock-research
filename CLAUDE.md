@@ -25,15 +25,13 @@ provider inside pipeline logic, the UI layer, or another provider.
 
 | # | Abstraction | PoC Implementation | Purpose |
 |---|---|---|---|
-| 1 | `AnnouncementProviderBase` | `GoogleNewsConnector`, `CompaniesHouseConnector` | News and filing ingestion |
+| 1 | `AnnouncementProviderBase` | `GoogleNewsRSSProvider`, `CompaniesHouseProvider` | News and filing ingestion |
 | 2 | `LLMProviderBase` | `GeminiProvider` | Analysis and reasoning |
 | 3 | `NotificationProviderBase` | `TelegramNotifier` | Alert dispatch |
 | 4 | `StorageProviderBase` | `FirestoreProvider` | Signal/discovery results and deduplication |
-| 5 | `StrategyLensBase` | `RegulatorycatalystLens` | Investment strategy implementation |
+| 5 | `StrategyLensBase` | `RegulatoryCatalystLens` | Investment strategy implementation |
 | 6 | `MarketDataProviderBase` | `YFinanceProvider` | Market cap, fundamentals, price, liquidity data |
 | 7 | `UniverseStorageProviderBase` | `FirestoreUniverseProvider` | Universe company list and refresh log |
-
-Abstractions 6 and 7 are **new** — to be implemented as part of the universe pipeline.
 
 ---
 
@@ -44,26 +42,31 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 ```
 ./
 ├── CLAUDE.md
+├── HANDOVER.md                       # Session handover notes — update at end of each session
 ├── .gitignore
 ├── backend/
 │   ├── abstractions.py               # All seven abstract base classes + dataclasses
-│   ├── pipeline.py                   # Core signal pipeline orchestration
-│   ├── universe.py                   # Static universe (5 companies) — to be superseded
-│   ├── universe_pipeline.py          # NEW — dynamic universe build pipeline
+│   ├── pipeline.py                   # Core signal pipeline orchestration — daily entry point
+│   ├── import_universe_csv.py        # Manual universe import: CSV → CH lookup → Firestore
+│   ├── universe.py                   # Static 5-company list — reference only, not used by pipeline
+│   ├── universe_pipeline.py          # DORMANT — PDF-based dynamic pipeline, do not run
 │   ├── lens_base_filters.py          # Shared universe pre-filter (passes_universe_filter)
 │   ├── lens_regulatory_catalyst.py   # Strategy Lens: regulatory/planning catalysts
 │   ├── storage_firestore.py          # StorageProviderBase implementation (Firestore)
-│   ├── storage_firestore_universe.py # NEW — UniverseStorageProviderBase implementation
-│   ├── market_data_yfinance.py       # NEW — MarketDataProviderBase implementation
+│   ├── storage_firestore_universe.py # UniverseStorageProviderBase implementation (Firestore)
+│   ├── market_data_yfinance.py       # MarketDataProviderBase implementation (dormant)
 │   ├── llm_gemini.py                 # LLMProviderBase implementation
 │   ├── telegram_notifier.py          # NotificationProviderBase implementation
-│   ├── google_news_connector.py      # AnnouncementProviderBase implementation
-│   ├── companies_house_connector.py  # AnnouncementProviderBase implementation
+│   ├── google_news_connector.py      # AnnouncementProviderBase — two-phase RSS ingestion
+│   ├── companies_house_connector.py  # AnnouncementProviderBase — CH filing ingestion
+│   ├── requirements.txt              # Python dependencies
 │   └── .env                          # API keys — never commit, VM only
 ├── frontend/
 │   └── app.py                        # Streamlit interface — runs locally, not on VM
 └── docs/
-    └── universe_pipeline_brief_v3.md # Universe pipeline specification
+    ├── AIM_data_complete_*.csv        # AIM universe source (date-versioned)
+    ├── FTSE_AllShare_complete_*.csv   # FTSE All-Share universe source (date-versioned)
+    └── universe_pipeline_brief.md    # Universe pipeline specification (for reference)
 ```
 
 **Rule:** never place backend logic in `frontend/` and never import from `backend/` inside `frontend/`. The Streamlit interface communicates with the backend exclusively via Firestore.
@@ -94,12 +97,11 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 ## Environment Variables (.env)
 
 ```
-NEWSAPI_KEY=
 COMPANIES_HOUSE_KEY=
 GEMINI_KEY=
 TELEGRAM_TOKEN=
 TELEGRAM_CHAT_ID=
-GOOGLE_APPLICATION_CREDENTIALS=/home/danjmorris/stock-research/gcp-credentials.json
+GOOGLE_APPLICATION_CREDENTIALS=/home/danjmorris/stock-research/backend/gcp-credentials.json
 ```
 
 ---
@@ -157,30 +159,43 @@ cd ~/stock-research && source backend/venv/bin/activate
   index. `app.py` handles the error gracefully with a fallback.
 - **Companies House:** covers England, Wales, Scotland, NI only.
   Offshore-incorporated LSE companies have no Companies House number.
+- **CH confidence scoring:** `import_universe_csv.py` matches company names to CH
+  numbers via fuzzy search (threshold 0.85, active companies only). Confidence 1.0 =
+  exact match; 0.85–<1.0 = fuzzy. Dissolved/inactive companies are excluded from
+  matching regardless of similarity score. The confidence flows through to
+  `Announcement.companies_house_confidence` and into LLM prompts as a data quality note.
+- **Google News rate limiting:** Phase 2 (per-company queries) runs at 1.0s/request.
+  845 companies ≈ 14 minutes. Pipeline total runtime ~20–25 minutes. Plan scheduling
+  accordingly.
+- **Firestore universe is a snapshot:** `save_universe()` deletes stale documents after
+  each write. Re-running `import_universe_csv.py` with a tighter filter will correctly
+  remove previously-admitted companies from Firestore.
 
 ---
 
 ## Current Build Status
 
-Steps 1–11 complete. The signal pipeline is operational end-to-end.
+The signal pipeline is fully operational end-to-end. All seven abstractions are
+implemented. The universe is live in Firestore with 845 companies.
 
-**Universe management:** static CSV approach in use. The dynamic pipeline
-(`universe_pipeline.py`) is on hold — no reliable free programmatic source
-for LSE/AIM constituent data was found.
+**Universe management (static CSV approach):**
+- `docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv` are the
+  source of truth. Committed to git for version history.
+- `import_universe_csv.py` imports CSVs → runs CH lookup → writes to Firestore.
+  Re-run whenever CSVs are updated. Takes ~8–9 minutes (CH API rate limit).
+- £1B market cap ceiling applied at import. 845 companies currently admitted
+  (547 AIM + 298 FTSE). 244 large-caps excluded.
+- `pipeline.py` reads the universe from Firestore at startup. **Raises RuntimeError
+  if Firestore is empty** — there is no fallback to `universe.py`. Run
+  `import_universe_csv.py` before the first pipeline run.
+- `universe_pipeline.py` is **dormant** — PDF-based dynamic pipeline, do not run.
 
-**How the universe works now:**
-- `docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv`
-  are the source of truth. These are committed to git; version history will
-  inform a future decision on whether to invest in automation.
-- Run `python import_universe_csv.py` manually to load the CSVs into Firestore.
-  Re-run whenever the CSV files are updated with fresh data.
-- `pipeline.py` reads the universe from Firestore at startup (via
-  `FirestoreUniverseProvider`). Falls back to the 5-company static list in
-  `universe.py` if Firestore is empty.
-- `universe_pipeline.py`, `market_data_yfinance.py`,
-  `storage_firestore_universe.py`, and `tests/` are complete but dormant.
-  Reactivate when a reliable programmatic data source becomes available.
-  See `docs/universe_pipeline_brief.md` for the full specification.
+**News ingestion:**
+- `GoogleNewsRSSProvider` runs in two phases: 5 topic queries (discovery) + one
+  per-company query for all 845 universe members (signal coverage). Phase 2 takes
+  ~14 minutes at 1.0s/request rate limit.
+- `CompaniesHouseProvider` fetches filing history for companies with a matched CH
+  number. Rate-limited at 0.6s/request.
 
 ## Commands
 
@@ -225,7 +240,7 @@ Data Ingestion → Deduplication (Firestore) → Routing → Pre-filtering → L
 ```
 
 **Two parallel queues:**
-- **Signal Queue** — companies in the monitored universe (`universe.py`). Receives full LLM analysis; high-confidence results trigger Telegram alerts and appear in the dashboard.
+- **Signal Queue** — companies in the monitored universe (loaded from Firestore). Receives full LLM analysis; high-confidence results trigger Telegram alerts and appear in the dashboard.
 - **Discovery Queue** — companies NOT in the universe. Receives a lightweight LLM assessment to recommend whether a company should be added. The universe only grows through explicit human decision (anti-bias principle).
 
 ### Pluggable Architecture (`backend/abstractions.py`)
@@ -255,6 +270,13 @@ Pre-filtering happens in two stages before LLM calls (to save cost and latency):
 
 Streamlit dashboard with two tabs — **Signals** (actionable opportunities with full LLM output) and **Discovery Queue** (universe candidates). Reads directly from Firestore. Supports dismissing results (soft-archive) and shows statistics.
 
-### Monitored Universe (`backend/universe.py`)
+### Monitored Universe
 
-A hardcoded list of LSE small-cap companies (currently 5: REE, ACG, ECOR, MCMM, GMR) with ticker, name, Companies House ID, sector, and thesis notes. Matched against incoming announcements by ticker or name.
+845 LSE small-cap companies stored in Firestore (`universe_companies` collection),
+loaded at pipeline startup via `FirestoreUniverseProvider`. Sourced from
+`docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv`, imported
+via `import_universe_csv.py`. Each company carries a `companies_house_number` and
+`companies_house_confidence` score populated at import time.
+
+`backend/universe.py` contains a legacy 5-company hardcoded list (REE, ACG, ECOR,
+MCMM, GMR). It is **not used by the pipeline** — retained for reference only.
