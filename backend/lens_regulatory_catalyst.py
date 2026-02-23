@@ -100,6 +100,22 @@ class RegulatoryCatalystLens(StrategyLensBase):
         Constructs a structured LLM prompt for deep analysis.
         Called only for announcements that passed pre_filter.
         """
+        # Companies House confidence note — included only when the CH number
+        # was matched by name similarity rather than exact lookup.
+        # None = source is not Companies House (not applicable).
+        # 1.0 = exact match (no caveat needed).
+        # 0.6–<1.0 = fuzzy match accepted above threshold — flag the uncertainty.
+        ch_confidence = announcement.companies_house_confidence
+        if ch_confidence is not None and ch_confidence < 1.0:
+            ch_note = (
+                f"\nDATA_QUALITY NOTE: The Companies House registration for this company "
+                f"was matched by name similarity (confidence: {ch_confidence:.0%}). "
+                f"The filing data may relate to a different corporate entity. "
+                f"Factor this into your SOURCE_RELIABILITY assessment."
+            )
+        else:
+            ch_note = ""
+
         return f"""You are an investment research analyst specialising in LSE-listed small-cap companies.
 
 Your task is to assess whether the following announcement represents a meaningful catalyst opportunity consistent with this investment thesis:
@@ -113,7 +129,7 @@ Ticker: {announcement.ticker}
 Source: {announcement.source_name}
 Published: {announcement.published_at}
 Headline: {announcement.headline}
-Body: {announcement.body}
+Body: {announcement.body}{ch_note}
 
 ASSESSMENT INSTRUCTIONS:
 1. RELEVANCE: Is this announcement relevant to the regulatory/planning catalyst thesis? Score 0-10.

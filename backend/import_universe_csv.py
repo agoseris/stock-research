@@ -24,9 +24,12 @@ composition over time.
 """
 
 import csv
+import difflib
 import glob
 import os
+import re
 import sys
+import time
 from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -38,6 +41,110 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # Path to docs/ relative to this file
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs")
+
+# ---------------------------------------------------------------------------
+# Companies House lookup
+# ---------------------------------------------------------------------------
+
+# Minimum similarity score (0–1) to accept a CH name match.
+# Below this threshold the company is imported without a CH number.
+CH_CONFIDENCE_THRESHOLD = 0.6
+
+# Rate limit: 600 requests per 5 minutes = 2/sec. 0.6s sleep is comfortably
+# within limits and leaves headroom for other API callers on the same key.
+CH_REQUEST_SLEEP = 0.6
+
+CH_SEARCH_URL = "https://api.company-information.service.gov.uk/search/companies"
+
+
+def _normalise_name(name: str) -> str:
+    """
+    Normalise a company name for comparison.
+
+    Strips share-class suffixes (ORD, NPV, etc.), legal-entity suffixes
+    (PLC, LIMITED, LTD, etc.), extraneous punctuation, and whitespace.
+    Returns a lowercase string suitable for similarity scoring.
+
+    Examples:
+      "GAMING REALMS PLC ORD 0.1P"  → "gaming realms"
+      "3I INFRASTRUCTURE PLC ORD NPV" → "3i infrastructure"
+      "AIRTEL AFRICA PLC ORD USD0.50" → "airtel africa"
+    """
+    # Strip everything from " ORD" onwards (share class, nominal value)
+    name = re.sub(r'\s+ORD\b.*$', '', name, flags=re.IGNORECASE)
+    # Strip common legal-entity suffixes
+    name = re.sub(
+        r'\b(PLC|PUBLIC LIMITED COMPANY|LIMITED|LTD|INC|CORP|CORPORATION'
+        r'|SE|SA|AG|NV|BV|SCA|PTE|PTY)\b\.?',
+        '', name, flags=re.IGNORECASE
+    )
+    # Collapse whitespace
+    return re.sub(r'\s+', ' ', name).strip().lower()
+
+
+def _score_name_match(csv_name: str, ch_name: str) -> float:
+    """
+    Return a similarity score 0.0–1.0 between two company names.
+
+    1.0 = exact match after normalisation.
+    Uses SequenceMatcher ratio for partial matches.
+    """
+    a = _normalise_name(csv_name)
+    b = _normalise_name(ch_name)
+    if a == b:
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _lookup_ch_number(
+    csv_name: str, api_key: str
+) -> Tuple[Optional[str], float]:
+    """
+    Search Companies House for a company by name.
+
+    Queries /search/companies with the normalised name, scores the top
+    results against the CSV name, and returns the best match above
+    CH_CONFIDENCE_THRESHOLD.
+
+    Returns (companies_house_number, confidence) or (None, 0.0) if no
+    confident match is found or if the API call fails.
+
+    Note: offshore-incorporated AIM companies (Cayman Islands, Jersey,
+    Isle of Man, etc.) will not appear in Companies House and will
+    correctly return (None, 0.0).
+    """
+    import requests
+
+    search_term = _normalise_name(csv_name)
+    if not search_term:
+        return None, 0.0
+
+    try:
+        resp = requests.get(
+            CH_SEARCH_URL,
+            params={"q": search_term, "items_per_page": 5},
+            auth=(api_key, ""),
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+    except Exception:
+        return None, 0.0
+
+    best_number: Optional[str] = None
+    best_score = 0.0
+
+    for item in items:
+        ch_name = item.get("title", "")
+        score = _score_name_match(csv_name, ch_name)
+        if score > best_score:
+            best_score = score
+            best_number = item.get("company_number")
+
+    if best_score < CH_CONFIDENCE_THRESHOLD:
+        return None, 0.0
+
+    return best_number, round(best_score, 3)
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +325,44 @@ def run_import() -> bool:
 
     # Build UniverseCompany objects
     companies = _build_universe_companies(rows, run_timestamp)
+
+    # Companies House lookup (optional — skipped if no API key configured)
+    ch_key = os.environ.get("COMPANIES_HOUSE_KEY", "")
+    if ch_key:
+        print(f"\nRunning Companies House lookup for {len(companies)} companies...")
+        print(f"  Rate limit: {CH_REQUEST_SLEEP}s per request  |  "
+              f"Confidence threshold: {CH_CONFIDENCE_THRESHOLD}")
+        matched = 0
+        unmatched = 0
+        for i, company in enumerate(companies, 1):
+            ch_number, confidence = _lookup_ch_number(company.company_name, ch_key)
+            company.companies_house_number = ch_number
+            company.companies_house_confidence = confidence if ch_number else None
+            if ch_number:
+                matched += 1
+            else:
+                unmatched += 1
+            if i % 50 == 0 or i == len(companies):
+                pct = round(100 * i / len(companies))
+                print(f"  {i}/{len(companies)} ({pct}%) — matched: {matched}, "
+                      f"unmatched: {unmatched}")
+            time.sleep(CH_REQUEST_SLEEP)
+
+        print(f"\n  CH lookup complete: {matched} matched, {unmatched} unmatched "
+              f"out of {len(companies)}.")
+        scores = [
+            c.companies_house_confidence
+            for c in companies
+            if c.companies_house_confidence is not None
+        ]
+        if scores:
+            high = sum(1 for s in scores if s >= 0.9)
+            mid  = sum(1 for s in scores if 0.7 <= s < 0.9)
+            low  = sum(1 for s in scores if s < 0.7)
+            print(f"  Confidence distribution: "
+                  f"{high} high (≥0.90), {mid} medium (0.70–0.89), {low} low (<0.70)")
+    else:
+        print("\nSkipping Companies House lookup (COMPANIES_HOUSE_KEY not set).")
 
     # Check whether Firestore already has a universe (refresh vs initial import)
     universe_storage = FirestoreUniverseProvider()

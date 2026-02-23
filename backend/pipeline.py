@@ -33,7 +33,7 @@ class AnalysisPipeline:
     ):
         self.providers = [
             GoogleNewsRSSProvider(),
-            CompaniesHouseProvider(),
+            CompaniesHouseProvider(universe_storage=universe_storage),
         ]
         self.lenses = [
             RegulatoryCatalystLens(),

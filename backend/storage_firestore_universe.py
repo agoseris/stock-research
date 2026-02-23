@@ -77,6 +77,8 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             ),
             "fifty_two_week_high": company.fifty_two_week_high,
             "fifty_two_week_low": company.fifty_two_week_low,
+            "companies_house_number": company.companies_house_number,
+            "companies_house_confidence": company.companies_house_confidence,
         }
 
     def _dict_to_company(self, data: dict) -> UniverseCompany:
@@ -116,6 +118,8 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             last_price_date=_parse_date(data.get("last_price_date")),
             fifty_two_week_high=data.get("fifty_two_week_high"),
             fifty_two_week_low=data.get("fifty_two_week_low"),
+            companies_house_number=data.get("companies_house_number"),
+            companies_house_confidence=data.get("companies_house_confidence"),
         )
 
     def _log_to_dict(self, log: RefreshLog) -> dict:
