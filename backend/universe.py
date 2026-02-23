@@ -1,16 +1,71 @@
 """
 Monitored Universe of LSE-listed small-caps.
-Each entry is verified against Companies House and LSE listings.
-Add new entries as they are researched and confirmed.
 
-Fields:
-  ticker          - LSE ticker symbol (without .L suffix)
-  name            - Full registered company name
-  companies_house - Companies House registration number (verified)
-  sector          - Broad sector classification
-  thesis_notes    - Why this company fits the overarching investment thesis
-  active          - Whether this company is currently being monitored
+Primary source: docs/AIM_data_complete_*.csv and docs/FTSE_AllShare_complete_*.csv
+These static files are updated manually (weekly or monthly) and committed to git,
+which builds a version history of universe composition over time. The most recent
+file matching each name pattern is used automatically.
+
+Fallback: the hand-picked UNIVERSE list below is used only if no CSV files are
+found in docs/ — this allows the pipeline to run on environments where the repo
+has not been fully deployed with the data files.
+
+The dynamic universe pipeline (universe_pipeline.py) is on hold pending a
+reliable free programmatic data source.
 """
+
+import csv
+import glob
+import os
+
+# Path to docs/ relative to this file (backend/../docs/)
+_DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs")
+
+
+def _load_from_docs_csvs() -> list:
+    """
+    Load universe from the most recent AIM and FTSE All-Share CSV files in docs/.
+
+    Looks for files matching:
+      docs/AIM_data_complete_*.csv
+      docs/FTSE_AllShare_complete_*.csv
+
+    The alphabetically last file from each pattern is used (the YYYYMMDD suffix
+    makes alphabetical order equivalent to chronological order). Both lists are
+    merged and deduplicated on ticker symbol.
+
+    Returns a list of {"ticker": ..., "name": ...} dicts, or [] if no files found.
+    """
+    aim_files = sorted(glob.glob(os.path.join(_DOCS_DIR, "AIM_data_complete_*.csv")))
+    ftse_files = sorted(glob.glob(os.path.join(_DOCS_DIR, "FTSE_AllShare_complete_*.csv")))
+
+    sources = []
+    if aim_files:
+        sources.append(aim_files[-1])
+    if ftse_files:
+        sources.append(ftse_files[-1])
+
+    if not sources:
+        return []
+
+    companies = []
+    seen: set = set()
+
+    for filepath in sources:
+        try:
+            with open(filepath, encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    ticker = (row.get("Code") or "").strip()
+                    name = (row.get("Name") or "").strip()
+                    if ticker and name and ticker not in seen:
+                        seen.add(ticker)
+                        companies.append({"ticker": ticker, "name": name})
+        except Exception as e:
+            print(f"  Warning: could not read {os.path.basename(filepath)}: {e}")
+
+    return companies
+
 
 UNIVERSE = [
     {
@@ -78,7 +133,13 @@ UNIVERSE = [
 
 
 def get_active_companies():
-    """Return only currently monitored companies."""
+    """
+    Return the hand-picked fallback company list.
+
+    NOTE: this is no longer used by pipeline.py. The pipeline requires a
+    Firestore-backed universe loaded via import_universe_csv.py. This list
+    is retained for reference and as a last-resort manual debugging aid.
+    """
     return [c for c in UNIVERSE if c.get("active", True)]
 
 
@@ -105,11 +166,25 @@ def get_companies_house_numbers():
 
 
 if __name__ == "__main__":
-    print(f"Universe contains {len(UNIVERSE)} companies")
-    print(f"Active: {len(get_active_companies())}")
-    print(f"Verified with Companies House number: {len(get_companies_house_numbers())}")
+    # Show CSV universe status
+    csv_companies = _load_from_docs_csvs()
+    if csv_companies:
+        print(f"CSV universe: {len(csv_companies)} companies loaded from docs/")
+        print(f"  Sample (first 5): {[c['ticker'] for c in csv_companies[:5]]}")
+        print(f"  Sample (last 5):  {[c['ticker'] for c in csv_companies[-5:]]}")
+        print()
+        print("To import this universe into Firestore, run:")
+        print("  python import_universe_csv.py")
+    else:
+        print("No CSV files found in docs/ — showing static fallback only.")
     print()
-    for company in get_active_companies():
+
+    # Show static fallback
+    print(f"Static fallback: {len(UNIVERSE)} hand-picked companies")
+    print(f"  Active: {len(get_active_companies())}")
+    print(f"  Verified with Companies House number: {len(get_companies_house_numbers())}")
+    print()
+    for company in UNIVERSE:
         ch = company["companies_house"] or "NOT VERIFIED"
         print(f"  [{company['ticker']}] {company['name']}")
         print(f"    Sector: {company['sector']}")

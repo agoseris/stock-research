@@ -164,21 +164,23 @@ cd ~/stock-research && source backend/venv/bin/activate
 
 Steps 1–11 complete. The signal pipeline is operational end-to-end.
 
-**Next task:** implement the dynamic universe management pipeline (Step 11a),
-as specified in `docs/universe_pipeline_brief_v3.md`.
+**Universe management:** static CSV approach in use. The dynamic pipeline
+(`universe_pipeline.py`) is on hold — no reliable free programmatic source
+for LSE/AIM constituent data was found.
 
-This involves:
-- Adding Abstractions 6 and 7 to `abstractions.py`
-- Implementing `YFinanceProvider` in `market_data_yfinance.py`
-- Implementing `FirestoreUniverseProvider` in `storage_firestore_universe.py`
-- Building `universe_pipeline.py` — the main quarterly refresh pipeline
-- Updating `pipeline.py` to read the universe from Firestore via
-  `UniverseStorageProviderBase.get_universe()` rather than from `universe.py`
-- Retaining `universe.py` as a fallback during transition
-- Implementing the five pre-build verification tests in `tests/`
-
-Read `docs/universe_pipeline_brief_v3.md` for the full specification before
-writing any code.
+**How the universe works now:**
+- `docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv`
+  are the source of truth. These are committed to git; version history will
+  inform a future decision on whether to invest in automation.
+- Run `python import_universe_csv.py` manually to load the CSVs into Firestore.
+  Re-run whenever the CSV files are updated with fresh data.
+- `pipeline.py` reads the universe from Firestore at startup (via
+  `FirestoreUniverseProvider`). Falls back to the 5-company static list in
+  `universe.py` if Firestore is empty.
+- `universe_pipeline.py`, `market_data_yfinance.py`,
+  `storage_firestore_universe.py`, and `tests/` are complete but dormant.
+  Reactivate when a reliable programmatic data source becomes available.
+  See `docs/universe_pipeline_brief.md` for the full specification.
 
 ## Commands
 
@@ -192,10 +194,15 @@ cd backend && python pipeline.py
 cd frontend && streamlit run app.py
 ```
 
+**Import universe from CSV into Firestore (run once, then re-run when CSVs are updated):**
+```bash
+cd backend && python import_universe_csv.py
+```
+
 **Test individual backend modules** (each has a `__main__` block):
 ```bash
 cd backend
-python universe.py                      # Verify monitored companies
+python universe.py                      # Verify CSV sources and static fallback
 python lens_base_filters.py             # Test universal pre-filters
 python lens_regulatory_catalyst.py      # Test regulatory catalyst strategy
 python storage_firestore.py             # Test Firestore connectivity

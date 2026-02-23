@@ -9,10 +9,6 @@ from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
 from storage_firestore import FirestoreProvider
 
-# universe.py is retained as a static fallback during the transition to
-# the dynamic Firestore-backed universe. It is only used if Firestore
-# returns an empty universe at startup.
-from universe import get_active_companies as _static_get_active_companies
 
 class AnalysisPipeline:
     """
@@ -56,44 +52,41 @@ class AnalysisPipeline:
         self, universe_storage: Optional[UniverseStorageProviderBase]
     ) -> List[dict]:
         """
-        Load the active company universe.
+        Load the active company universe from Firestore.
 
-        Attempts to read from Firestore via UniverseStorageProviderBase.
-        If universe_storage is not provided, or if Firestore returns an
-        empty list, falls back to the static universe.py list.
+        Requires universe_storage to be provided and the Firestore universe
+        collection to be populated. Run `python import_universe_csv.py` to
+        initialise the universe before starting the pipeline.
 
-        Returns a list of dicts with at least 'ticker' and 'name' keys,
-        compatible with the existing _is_in_universe() matching logic.
+        Raises RuntimeError if the universe cannot be loaded or is empty.
         """
-        if universe_storage is not None:
-            try:
-                companies = universe_storage.get_universe()
-                if companies:
-                    # Convert UniverseCompany dataclasses to the dict shape
-                    # expected by _is_in_universe() (ticker + name).
-                    result = [
-                        {"ticker": c.ticker_lse, "name": c.company_name}
-                        for c in companies
-                    ]
-                    print(
-                        f"Universe loaded from Firestore: {len(result)} companies."
-                    )
-                    return result
-                else:
-                    print(
-                        "Universe storage returned empty list — "
-                        "falling back to static universe.py."
-                    )
-            except Exception as e:
-                print(
-                    f"Failed to load universe from Firestore ({e}) — "
-                    "falling back to static universe.py."
-                )
+        if universe_storage is None:
+            raise RuntimeError(
+                "universe_storage not provided. The pipeline requires a "
+                "Firestore-backed universe. Pass a FirestoreUniverseProvider "
+                "instance and run `python import_universe_csv.py` first."
+            )
 
-        # Static fallback
-        static = _static_get_active_companies()
-        print(f"Using static universe: {len(static)} companies.")
-        return static
+        try:
+            companies = universe_storage.get_universe()
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to load universe from Firestore: {e}. "
+                "Check Firestore connectivity and credentials."
+            ) from e
+
+        if not companies:
+            raise RuntimeError(
+                "Firestore universe is empty. "
+                "Run `python import_universe_csv.py` to initialise the universe."
+            )
+
+        result = [
+            {"ticker": c.ticker_lse, "name": c.company_name}
+            for c in companies
+        ]
+        print(f"Universe loaded from Firestore: {len(result)} companies.")
+        return result
 
     def _is_in_universe(self, announcement: Announcement) -> bool:
         """Check if an announcement relates to a company in the universe."""
