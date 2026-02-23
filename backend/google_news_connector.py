@@ -140,7 +140,8 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
         companies = self._universe_storage.get_universe()
         phase2_count = 0
 
-        for company in companies:
+        total = len(companies)
+        for i, company in enumerate(companies, 1):
             if company.listing_exchange == "AIM":
                 query = f'"{company.company_name}" "AIM listed"'
             else:
@@ -161,8 +162,13 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
                     announcements.append(ann)
                     phase2_count += 1
 
-        print(f"  [GoogleNews] Phase 2 (per-company queries): {phase2_count} items "
-              f"across {len(companies)} companies")
+            if i % 50 == 0 or i == total:
+                pct = round(100 * i / total)
+                print(f"  [GoogleNews] Phase 2: {i}/{total} ({pct}%) — "
+                      f"{phase2_count} items so far")
+
+        print(f"  [GoogleNews] Phase 2 complete: {phase2_count} items "
+              f"across {total} companies")
 
         return announcements
 
