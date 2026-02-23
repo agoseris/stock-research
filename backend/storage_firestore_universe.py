@@ -160,9 +160,13 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
         Persist the full universe to Firestore, overwriting the previous snapshot.
 
         Each company is written as a separate document keyed by ticker_lse.
-        Uses individual set() calls rather than a batch write so that partial
-        Firestore failures are isolated to individual documents and logged
-        without aborting the rest of the write.
+        After writing, any documents whose ticker is not in the new universe
+        are deleted — this ensures the collection is a true snapshot of the
+        current universe rather than an accumulation of all past imports.
+
+        Uses individual set()/delete() calls so that partial Firestore failures
+        are isolated to individual documents and logged without aborting the
+        rest of the write.
 
         This method must only be called after both tiers are fully built.
         """
@@ -184,6 +188,24 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
 
             print(f"  [FirestoreUniverse] save_universe: "
                   f"{written} written, {failed} failed.")
+
+            # Delete stale documents — tickers present in Firestore but not
+            # in the new universe (e.g. removed by market cap filter or delisted)
+            new_tickers = {c.ticker_lse for c in companies}
+            existing_docs = self.db.collection(self.UNIVERSE_COLLECTION).stream()
+            deleted = 0
+            for doc in existing_docs:
+                if doc.id not in new_tickers:
+                    try:
+                        doc.reference.delete()
+                        deleted += 1
+                    except Exception as e:
+                        print(f"  [FirestoreUniverse] save_universe: "
+                              f"failed to delete stale {doc.id}: {e}")
+            if deleted:
+                print(f"  [FirestoreUniverse] save_universe: "
+                      f"{deleted} stale documents deleted.")
+
         except Exception as e:
             print(f"  [FirestoreUniverse] save_universe outer failure: {e}")
 
