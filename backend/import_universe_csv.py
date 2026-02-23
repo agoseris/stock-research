@@ -366,10 +366,10 @@ def run_import() -> bool:
         ]
         if scores:
             high = sum(1 for s in scores if s >= 0.9)
-            mid  = sum(1 for s in scores if 0.7 <= s < 0.9)
-            low  = sum(1 for s in scores if s < 0.7)
+            mid  = sum(1 for s in scores if 0.8 <= s < 0.9)
+            low  = sum(1 for s in scores if s < 0.8)
             print(f"  Confidence distribution: "
-                  f"{high} high (≥0.90), {mid} medium (0.70–0.89), {low} low (<0.70)")
+                  f"{high} high (≥0.90), {mid} medium (0.80–0.89), {low} low (<0.80)")
     else:
         print("\nSkipping Companies House lookup (COMPANIES_HOUSE_KEY not set).")
 
