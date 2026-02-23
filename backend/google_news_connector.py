@@ -4,8 +4,14 @@ from email.utils import parsedate_to_datetime
 from typing import List, Optional
 
 import feedparser
+import requests
 
 from abstractions import Announcement, AnnouncementProviderBase, UniverseStorageProviderBase
+
+# Timeout in seconds for each HTTP request to Google News RSS.
+# feedparser.parse() has no built-in timeout — we fetch via requests first
+# so a hung connection is detected and aborted rather than blocking forever.
+_FETCH_TIMEOUT = 15
 
 
 class GoogleNewsRSSProvider(AnnouncementProviderBase):
@@ -25,6 +31,7 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
           AIM:       "<Company Name>" "AIM listed"
         Results have ticker set directly, ensuring reliable signal routing.
         Rate-limited at REQUEST_SLEEP seconds between requests.
+        Progress is printed every PROGRESS_INTERVAL companies.
 
     Requires universe_storage to be injected for Phase 2. If not provided,
     only Phase 1 topic queries run.
@@ -46,6 +53,8 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
     RESULTS_PER_COMPANY = 3
     # 1.0s between requests — conservative safe rate for undocumented RSS endpoint
     REQUEST_SLEEP = 1.0
+    # Print a progress line every N companies
+    PROGRESS_INTERVAL = 10
 
     BASE_URL = "https://news.google.com/rss/search?hl=en-GB&gl=GB&ceid=GB:en&q={}"
 
@@ -56,15 +65,25 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
         """
         Fetch and parse a single Google News RSS query.
 
+        Fetches via requests (with a timeout) then passes the content to
+        feedparser for parsing. This prevents feedparser from hanging
+        indefinitely on a slow or blocked connection.
+
         Returns a list of raw entry dicts, capped at max_items.
-        Returns [] on any error.
+        Returns [] on any network or parse error.
         """
         try:
             encoded = query.replace(" ", "+")
-            feed = feedparser.parse(self.BASE_URL.format(encoded))
+            url = self.BASE_URL.format(encoded)
+            resp = requests.get(url, timeout=_FETCH_TIMEOUT)
+            resp.raise_for_status()
+            feed = feedparser.parse(resp.text)
             return feed.entries[:max_items]
+        except requests.exceptions.Timeout:
+            print(f"  [GoogleNews] Timeout fetching query: {query[:60]}")
+            return []
         except Exception as e:
-            print(f"  Google News RSS error for query '{query}': {e}")
+            print(f"  [GoogleNews] Error fetching query '{query[:60]}': {e}")
             return []
 
     def _entry_to_announcement(
@@ -118,8 +137,11 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
         # ------------------------------------------------------------------
         # Phase 1: topic queries — broad discovery, no universe dependency
         # ------------------------------------------------------------------
+        print(f"  [GoogleNews] Phase 1: running {len(self.TOPIC_QUERIES)} topic queries...")
         for query in self.TOPIC_QUERIES:
-            for entry in self._fetch_feed(query, self.RESULTS_PER_TOPIC):
+            entries = self._fetch_feed(query, self.RESULTS_PER_TOPIC)
+            before = len(announcements)
+            for entry in entries:
                 link = entry.get("link", "")
                 if link in seen_urls:
                     continue
@@ -127,8 +149,12 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
                 ann = self._entry_to_announcement(entry)
                 if ann:
                     announcements.append(ann)
+            print(f"  [GoogleNews] Phase 1:   '{query[:50]}' → {len(announcements) - before} items")
 
-        print(f"  [GoogleNews] Phase 1 (topic queries): {len(announcements)} items")
+        print(f"  [GoogleNews] Phase 1 complete: {len(announcements)} items total")
+        if len(announcements) == 0:
+            print("  [GoogleNews] WARNING: Phase 1 returned 0 items — "
+                  "Google News may be unreachable from this host.")
 
         # ------------------------------------------------------------------
         # Phase 2: per-company queries — targeted signal coverage
@@ -138,9 +164,11 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
             return announcements[:max_results]
 
         companies = self._universe_storage.get_universe()
-        phase2_count = 0
-
         total = len(companies)
+        phase2_count = 0
+        print(f"  [GoogleNews] Phase 2: querying {total} universe companies "
+              f"({self.REQUEST_SLEEP}s/request, ~{round(total * self.REQUEST_SLEEP / 60)} min)...")
+
         for i, company in enumerate(companies, 1):
             if company.listing_exchange == "AIM":
                 query = f'"{company.company_name}" "AIM listed"'
@@ -162,10 +190,10 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
                     announcements.append(ann)
                     phase2_count += 1
 
-            if i % 50 == 0 or i == total:
+            if i % self.PROGRESS_INTERVAL == 0 or i == total:
                 pct = round(100 * i / total)
                 print(f"  [GoogleNews] Phase 2: {i}/{total} ({pct}%) — "
-                      f"{phase2_count} items so far")
+                      f"{phase2_count} items | last: [{company.ticker_lse}] {company.company_name[:30]}")
 
         print(f"  [GoogleNews] Phase 2 complete: {phase2_count} items "
               f"across {total} companies")
