@@ -1,154 +1,155 @@
 # Session Handover
 **Date:** 23 February 2026
 **Branch:** `master`
-**Last commit:** `0bb2dc4` — "Fix save_universe to delete stale Firestore documents"
+**Last commit:** `9ad048e` — "Park GoogleNewsProvider: GCP free trial blocks Custom Search JSON API"
 
 ---
 
 ## Current State
 
-The signal pipeline is fully operational end-to-end. Universe management is working via
-static CSV files imported into Firestore. All seven abstractions are implemented.
+The pipeline is fully operational end-to-end and running on a daily cron schedule.
+All seven abstractions are implemented. The universe is live in Firestore with 845
+companies.
 
 ---
 
-## What Was Built This Session
+## Pipeline Summary
 
-### Universe management (static CSV approach)
-
-The dynamic pipeline (`universe_pipeline.py`) is on hold — no reliable free programmatic
-source for LSE/AIM constituent data exists. Instead:
-
-- `docs/AIM_data_complete_v20260223.csv` — 554 AIM stocks
-- `docs/FTSE_AllShare_complete_v20260223.csv` — 535 FTSE All-Share stocks
-- `backend/import_universe_csv.py` — imports CSVs → Firestore. Apply £1B market cap
-  ceiling (consistent with thesis Tier 2 upper bound). 845 companies admitted
-  (547 AIM + 298 FTSE); 244 large-caps excluded.
-- `pipeline.py` reads the universe exclusively from Firestore. Raises `RuntimeError`
-  if Firestore is empty — no fallback to the static `universe.py` list.
-
-### Companies House number lookup
-
-`import_universe_csv.py` looks up each company's CH registration number via the CH API
-at import time using fuzzy name matching:
-
-- **Threshold:** 0.85 (raised from 0.6 after a false positive at 0.733 — a dissolved
-  company matched to a live AIM stock)
-- **Active-only filter:** dissolved, liquidated, and struck-off companies are excluded
-  from matching regardless of similarity score
-- **Confidence score:** stored on each `UniverseCompany` as `companies_house_confidence`
-  (1.0 = exact match, 0.85–<1.0 = fuzzy match accepted)
-- **Rate limit:** 0.6s between requests (600 req/5-min CH limit)
-- **Offline companies:** offshore-incorporated AIM companies (Cayman, Jersey, IoM etc.)
-  correctly return no CH number
-
-The confidence score flows through to:
-- `Announcement.companies_house_confidence` (set by `CompaniesHouseProvider`)
-- `lens_regulatory_catalyst.py` `build_prompt()` — adds a `DATA_QUALITY NOTE` when
-  confidence < 1.0, telling the LLM the CH match was fuzzy and to factor it into
-  `SOURCE_RELIABILITY`
-
-### Google News two-phase ingestion
-
-`GoogleNewsRSSProvider` now runs in two phases:
-
-**Phase 1 — topic queries (discovery)**
-Five broad topic searches. Results have `ticker="UNKNOWN"` and are routed to the
-discovery queue unless name/ticker matches a universe member. Fast (~5 seconds).
-
-**Phase 2 — per-company queries (signal coverage)**
-One query per universe company. Uses exchange-appropriate qualifier:
-- `LSE_MAIN`: `"<Company Name>" LSE`
-- `AIM`: `"<Company Name>" "AIM listed"`
-
-Results have `ticker` set directly (reliable signal routing). Rate-limited at 1.0s
-between requests. Runtime: ~14 minutes for 845 companies. Progress printed every
-50 companies.
-
-### Companies House connector rate limiting
-
-`CompaniesHouseProvider.get_recent_announcements()` now sleeps 0.6s between per-company
-filing fetches. Previously ran in a tight loop — fine for 3 companies, problematic at
-hundreds of CH-matched universe members.
-
-### Firestore stale document fix
-
-`save_universe()` previously only upserted documents, never deleted. This caused
-the original 1089-company (unfiltered) import to persist alongside the 845-company
-(filtered) import. Now deletes any document whose ticker is absent from the new
-universe after each write.
+| Component | Status | Detail |
+|---|---|---|
+| Universe | Live | 845 companies (547 AIM + 298 FTSE), £1B ceiling applied |
+| Companies House | Live | 671 companies matched, 0.85 confidence threshold, active-only |
+| Google News / CSE | Parked | See below |
+| LLM analysis | Live | Gemini, regulatory catalyst lens |
+| Notifications | Live | Telegram |
+| Dashboard | Live | Streamlit, reads Firestore directly |
+| Cron schedule | Set | 07:00 UTC daily, logs to `~/pipeline.log` |
 
 ---
 
-## VM State — Actions Required
+## News Ingestion — Current State and History
 
-The following changes have been pushed but the VM needs to pull and the import
-needs to be re-run:
+The pipeline currently ingests announcements from **Companies House only**.
+
+### What was tried and why it failed
+
+| Source | Outcome |
+|---|---|
+| Google News RSS (`news.google.com/rss`) | 503 — GCP IP ranges blocked by Google |
+| Investegate RSS | Redirects to homepage — RSS format deprecated/removed |
+| Yahoo Finance RSS | 429 Too Many Requests from GCP |
+| Proactive Investors RSS | Login required (paywalled) |
+| LSE API | 404 — endpoint not found |
+| Google Custom Search JSON API | 403 PERMISSION_DENIED — GCP free trial blocks APIs with paid tiers |
+
+### Google Custom Search — parked, not deleted
+
+`backend/google_news_connector.py` contains a working `GoogleNewsProvider` class
+using the Custom Search JSON API. It is commented out in `pipeline.py` with
+reactivation instructions. To reactivate:
+
+1. Upgrade the GCP account from free trial to standard (no immediate charge —
+   trial credits continue to be used first)
+2. Ensure Custom Search API is enabled in `stock-research-poc`
+3. Add `GOOGLE_CSE_KEY` and `GOOGLE_CSE_ID` to `backend/.env`
+4. Uncomment `GoogleNewsProvider()` in `pipeline.py`
+
+The Programmable Search Engine (CSE ID: `e160e507a46a742d5`) is already configured
+with 10 UK financial news sites and is ready to use.
+
+The free tier is 100 queries/day. Five topic queries per pipeline run costs nothing.
+Per-company queries (845/run at $0.004/run) are a noted future nice-to-have.
+
+### Companies House as sole signal source
+
+CH filings are well-aligned with the thesis — they record informed-party actions
+directly:
+- `SH01` — Return of Allotment of Shares (a placing has occurred)
+- `AP01/TM01` — Director appointed/resigned
+- `PSC01` — Person of Significant Control change
+- `MR01/MR04` — Charge created/satisfied (debt raised or repaid)
+
+Most routine filings (`AA` annual accounts, `CS01` confirmation statements) will
+correctly fail the regulatory catalyst pre-filter and not reach the LLM.
+
+---
+
+## CH Confidence Scoring
+
+Companies House numbers are matched by fuzzy name search at import time:
+- **Threshold:** 0.85 (raised from 0.6 — false positive found at 0.733)
+- **Active-only filter:** dissolved/liquidated companies excluded from matching
+- **Confidence 1.0:** exact name match after normalisation
+- **Confidence 0.85–<1.0:** fuzzy match — LLM prompt includes a DATA_QUALITY NOTE
+
+---
+
+## Universe Management
+
+To refresh the universe with updated CSV files:
+
+1. Replace `docs/AIM_data_complete_*.csv` and/or `docs/FTSE_AllShare_complete_*.csv`
+   with fresh versions (date-stamped filename)
+2. Commit to git
+3. Deploy to VM (`git pull`)
+4. Run `python import_universe_csv.py` — takes ~8–9 minutes (CH API rate limit)
+5. Verify: `python pipeline.py` should report 845 (or updated count) companies
+
+`save_universe()` deletes stale documents after each write — removing a company from
+the CSV correctly removes it from Firestore on the next import.
+
+---
+
+## VM Operations
 
 ```bash
+# Connect
+ssh danjmorris@<vm-ip>
+
+# Activate venv
+source ~/stock-research/backend/venv/bin/activate
+
+# Deploy latest code
 cd ~/stock-research && git pull
-source backend/venv/bin/activate
-cd backend && python import_universe_csv.py
-```
 
-This will:
-1. Re-run CH lookup with the new 0.85 threshold and active-only filter
-2. Delete the 244 stale large-cap documents (Firestore will settle at 845)
-3. Takes ~8–9 minutes (845 companies × 0.6s CH API rate limit)
+# Run pipeline manually
+cd ~/stock-research && /home/danjmorris/stock-research/backend/venv/bin/python backend/pipeline.py
 
-After the import, verify:
-```bash
-python pipeline.py
-# Should report: "Universe loaded from Firestore: 845 companies"
+# Check cron log
+tail -50 ~/pipeline.log
+
+# Check cron schedule
+crontab -l
+# Should show: 0 7 * * * cd /home/danjmorris/stock-research && /home/danjmorris/stock-research/backend/venv/bin/python backend/pipeline.py >> /home/danjmorris/pipeline.log 2>&1
+
+# Re-import universe (after CSV update)
+cd ~/stock-research/backend && python import_universe_csv.py
 ```
 
 ---
 
-## Known Gaps / Next Considerations
-
-### Scheduling
-The pipeline is not yet scheduled. For daily execution, set up a cron job on the VM:
-```bash
-crontab -e
-# Add: 0 6 * * * cd /home/danjmorris/stock-research && source backend/venv/bin/activate && python backend/pipeline.py >> /home/danjmorris/pipeline.log 2>&1
-```
-Daily cadence is sufficient for the PoC. The pipeline takes ~20–25 minutes per run
-(Google News Phase 2 ~14 min + CH filing fetch variable).
-
-### Universe refresh cadence
-CSVs are currently dated 23 Feb 2026. Update them monthly or when universe composition
-changes materially. Re-run `import_universe_csv.py` after each CSV update.
-
-### `universe_pipeline.py`
-Dormant. Contains PDF extraction code for FTSE Russell constituent lists — now
-obsolete (PDFs lack tickers, AXX URL is dead). Retained for reference only.
-Do not run it.
-
-### `universe.py` static list
-Retained as reference (5 hand-picked companies). No longer used by `pipeline.py`.
-`get_active_companies()` is not called anywhere in the live system.
-
----
-
-## File Map — What Does What
+## File Map
 
 | File | Role |
 |------|------|
-| `pipeline.py` | Core pipeline orchestration — entry point for daily runs |
+| `pipeline.py` | Core pipeline — entry point for daily runs |
 | `import_universe_csv.py` | Manual universe import: CSV → CH lookup → Firestore |
-| `abstractions.py` | All seven abstract base classes + `UniverseCompany`, `RefreshLog` |
-| `storage_firestore_universe.py` | `FirestoreUniverseProvider` — reads/writes universe_companies collection |
-| `google_news_connector.py` | Two-phase Google News RSS ingestion |
-| `companies_house_connector.py` | CH filing ingestion, rate-limited, confidence-aware |
-| `lens_regulatory_catalyst.py` | Strategy lens + LLM prompt builder (CH confidence note) |
-| `universe.py` | Static 5-company fallback — reference only, not used by pipeline |
-| `universe_pipeline.py` | Dormant — PDF-based dynamic pipeline, do not run |
+| `google_news_connector.py` | `GoogleNewsProvider` — parked, intact for reactivation |
+| `companies_house_connector.py` | CH filing ingestion, rate-limited at 0.6s/request |
+| `storage_firestore_universe.py` | `FirestoreUniverseProvider` — universe read/write |
+| `lens_regulatory_catalyst.py` | Strategy lens + LLM prompt builder |
+| `abstractions.py` | All seven abstract base classes + dataclasses |
+| `universe.py` | Static 5-company list — reference only, not used by pipeline |
+| `universe_pipeline.py` | DORMANT — PDF-based dynamic pipeline, do not run |
 
 ---
 
-## VM Reminders
+## Known Gaps / Future Work
 
-- Connect as `danjmorris` (not `agoseris`)
-- Venv: `source ~/stock-research/backend/venv/bin/activate`
-- Credentials: `backend/.env` → `GOOGLE_APPLICATION_CREDENTIALS=/home/danjmorris/stock-research/backend/gcp-credentials.json`
-- Deploy: local edit → commit → push → `git pull` on VM
+| Item | Notes |
+|---|---|
+| News ingestion | Parked — reactivate CSE when GCP account upgraded from free trial |
+| Per-company news queries | Nice-to-have — 845 × CSE queries at ~$1.12/month once CSE active |
+| Pipeline scheduling | Done — 07:00 UTC daily cron |
+| Universe refresh automation | Manual for now — CSV update + import_universe_csv.py |
+| RNS direct feed | Not yet investigated as a paid option (LSEG, EODHD) |
