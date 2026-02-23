@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
@@ -29,6 +30,8 @@ class CompaniesHouseProvider(AnnouncementProviderBase):
 
     BASE_URL = "https://api.company-information.service.gov.uk"
     SOURCE_NAME = "Companies House"
+    # 0.6s between requests — comfortably within the 600 req/5-min rate limit
+    REQUEST_SLEEP = 0.6
 
     RELEVANT_FILING_TYPES = {
         "AA": "Annual Accounts",
@@ -89,6 +92,7 @@ class CompaniesHouseProvider(AnnouncementProviderBase):
               f"(out of {len(universe_companies)} in universe)")
 
         for ticker, (company_number, ch_confidence, company_name) in verified.items():
+            time.sleep(self.REQUEST_SLEEP)
             filings = self.get_filings(company_number, max_results=5)
             for filing in filings:
                 date_str = filing.get("date", "")

@@ -32,7 +32,7 @@ class AnalysisPipeline:
         universe_storage: Optional[UniverseStorageProviderBase] = None,
     ):
         self.providers = [
-            GoogleNewsRSSProvider(),
+            GoogleNewsRSSProvider(universe_storage=universe_storage),
             CompaniesHouseProvider(universe_storage=universe_storage),
         ]
         self.lenses = [
