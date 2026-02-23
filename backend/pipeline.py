@@ -3,7 +3,7 @@ from telegram_notifier import TelegramNotifier
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from abstractions import Announcement, StorageProviderBase, UniverseStorageProviderBase
-from google_news_connector import GoogleNewsRSSProvider
+from google_news_connector import GoogleNewsProvider
 from companies_house_connector import CompaniesHouseProvider
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
@@ -32,7 +32,7 @@ class AnalysisPipeline:
         universe_storage: Optional[UniverseStorageProviderBase] = None,
     ):
         self.providers = [
-            GoogleNewsRSSProvider(universe_storage=universe_storage),
+            GoogleNewsProvider(),
             CompaniesHouseProvider(universe_storage=universe_storage),
         ]
         self.lenses = [

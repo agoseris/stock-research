@@ -102,6 +102,8 @@ GEMINI_KEY=
 TELEGRAM_TOKEN=
 TELEGRAM_CHAT_ID=
 GOOGLE_APPLICATION_CREDENTIALS=/home/danjmorris/stock-research/backend/gcp-credentials.json
+GOOGLE_CSE_KEY=        # GCP Console → APIs & Services → Credentials → Create API key
+GOOGLE_CSE_ID=         # programmablesearchengine.google.com → Create engine → Search engine ID
 ```
 
 ---

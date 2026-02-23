@@ -1,45 +1,40 @@
+import os
 import time
 from datetime import datetime, timezone, timedelta
-from email.utils import parsedate_to_datetime
 from typing import List, Optional
 
-import feedparser
 import requests
+from dotenv import load_dotenv
 
-from abstractions import Announcement, AnnouncementProviderBase, UniverseStorageProviderBase
+from abstractions import Announcement, AnnouncementProviderBase
 
-# Timeout in seconds for each HTTP request to Google News RSS.
-# feedparser.parse() has no built-in timeout — we fetch via requests first
-# so a hung connection is detected and aborted rather than blocking forever.
-_FETCH_TIMEOUT = 15
+load_dotenv()
+
+# Maximum results per API request — hard limit imposed by the Custom Search API.
+_MAX_PER_REQUEST = 10
 
 
-class GoogleNewsRSSProvider(AnnouncementProviderBase):
-    """Fetches UK financial and regulatory news via Google News RSS.
+class GoogleNewsProvider(AnnouncementProviderBase):
+    """Fetches UK financial news via the Google Custom Search JSON API (news mode).
 
-    Two-phase ingestion:
+    Uses tbm=nws (news search) with UK geo-targeting, running the same five
+    topic queries used previously for discovery. Being a first-party Google API,
+    it is not subject to the IP-range blocking that affects Google News RSS
+    scraping from GCP.
 
-    Phase 1 — Topic queries (discovery)
-        Five broad topic searches for regulatory/planning catalyst news.
-        Results have ticker="UNKNOWN" and are routed to the discovery queue
-        unless the company name or ticker matches a universe member.
+    Free tier: 100 queries/day. Five topic queries per pipeline run leaves
+    95 queries/day in reserve with no additional cost.
 
-    Phase 2 — Per-company queries (signal coverage)
-        One query per universe company, using the company name and an
-        exchange-appropriate qualifier:
-          LSE_MAIN:  "<Company Name>" LSE
-          AIM:       "<Company Name>" "AIM listed"
-        Results have ticker set directly, ensuring reliable signal routing.
-        Rate-limited at REQUEST_SLEEP seconds between requests.
-        Progress is printed every PROGRESS_INTERVAL companies.
+    Requires two environment variables:
+      GOOGLE_CSE_KEY  — API key created in GCP Console → APIs & Services → Credentials
+      GOOGLE_CSE_ID   — Programmable Search Engine ID from programmablesearchengine.google.com
 
-    Requires universe_storage to be injected for Phase 2. If not provided,
-    only Phase 1 topic queries run.
+    If either variable is missing, get_recent_announcements() returns [] with a
+    warning rather than raising — the pipeline continues with Companies House data only.
     """
 
-    SOURCE_NAME = "Google News RSS"
+    SOURCE_NAME = "Google News"
 
-    # Phase 1 — topic queries for discovery
     TOPIC_QUERIES = [
         "UK plc planning permission regulatory approval shares",
         "UK mining permit licence approval LSE shares plc",
@@ -47,71 +42,91 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
         "RNS announcement regulatory UK small cap plc",
         "UK plc permit granted refused environment agency",
     ]
-    RESULTS_PER_TOPIC = 10  # per query, before URL deduplication
 
-    # Phase 2 — per-company queries
-    RESULTS_PER_COMPANY = 3
-    # 1.0s between requests — conservative safe rate for undocumented RSS endpoint
-    REQUEST_SLEEP = 1.0
-    # Print a progress line every N companies
-    PROGRESS_INTERVAL = 10
+    # Small sleep between queries — well within the 100/day free tier
+    REQUEST_SLEEP = 0.5
 
-    BASE_URL = "https://news.google.com/rss/search?hl=en-GB&gl=GB&ceid=GB:en&q={}"
+    CSE_URL = "https://www.googleapis.com/customsearch/v1"
 
-    def __init__(self, universe_storage: Optional[UniverseStorageProviderBase] = None):
-        self._universe_storage = universe_storage
+    def __init__(self):
+        self.api_key = os.getenv("GOOGLE_CSE_KEY", "")
+        self.cse_id = os.getenv("GOOGLE_CSE_ID", "")
 
-    def _fetch_feed(self, query: str, max_items: int) -> List[dict]:
+    def _fetch_news(self, query: str) -> List[dict]:
         """
-        Fetch and parse a single Google News RSS query.
+        Call the Custom Search API for one query in news mode.
 
-        Fetches via requests (with a timeout) then passes the content to
-        feedparser for parsing. This prevents feedparser from hanging
-        indefinitely on a slow or blocked connection.
-
-        Returns a list of raw entry dicts, capped at max_items.
-        Returns [] on any network or parse error.
+        Returns a list of result item dicts. Returns [] on any error.
         """
         try:
-            encoded = query.replace(" ", "+")
-            url = self.BASE_URL.format(encoded)
             resp = requests.get(
-                url,
-                timeout=_FETCH_TIMEOUT,
-                headers={"User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/122.0.0.0 Safari/537.36"
-                )},
+                self.CSE_URL,
+                params={
+                    "key": self.api_key,
+                    "cx": self.cse_id,
+                    "q": query,
+                    "tbm": "nws",
+                    "num": _MAX_PER_REQUEST,
+                    "gl": "GB",
+                    "hl": "en-GB",
+                },
+                timeout=15,
             )
             resp.raise_for_status()
-            feed = feedparser.parse(resp.text)
-            return feed.entries[:max_items]
+            return resp.json().get("items", [])
         except requests.exceptions.Timeout:
-            print(f"  [GoogleNews] Timeout fetching query: {query[:60]}")
+            print(f"  [GoogleCSE] Timeout on query: {query[:60]}")
             return []
         except Exception as e:
-            print(f"  [GoogleNews] Error fetching query '{query[:60]}': {e}")
+            print(f"  [GoogleCSE] Error on query '{query[:60]}': {e}")
             return []
 
-    def _entry_to_announcement(
-        self,
-        entry: dict,
-        ticker: str = "UNKNOWN",
-        company_name: Optional[str] = None,
-    ) -> Optional[Announcement]:
+    def _item_to_announcement(self, item: dict) -> Optional[Announcement]:
         """
-        Convert a feedparser entry to an Announcement.
+        Convert a Custom Search result item to an Announcement.
 
-        Returns None if the entry is older than 90 days or has no URL.
+        Publication date is extracted from pagemap metadata where available;
+        falls back to now() if absent. Returns None if the article is older
+        than 90 days or has no URL.
         """
-        link = entry.get("link", "")
+        link = item.get("link", "")
         if not link:
             return None
 
-        try:
-            published_at = parsedate_to_datetime(entry.get("published", ""))
-        except Exception:
+        # Attempt to extract publication date from pagemap schema data
+        published_at: Optional[datetime] = None
+        pagemap = item.get("pagemap", {})
+
+        # Try NewsArticle schema first
+        for article in pagemap.get("newsarticle", []):
+            date_str = article.get("datepublished", "")
+            if date_str:
+                try:
+                    published_at = datetime.fromisoformat(
+                        date_str.replace("Z", "+00:00")
+                    )
+                    break
+                except ValueError:
+                    pass
+
+        # Fall back to Open Graph / meta tags
+        if published_at is None:
+            for tag in pagemap.get("metatags", []):
+                for key in ("article:published_time", "og:article:published_time",
+                            "datePublished", "date"):
+                    date_str = tag.get(key, "")
+                    if date_str:
+                        try:
+                            published_at = datetime.fromisoformat(
+                                date_str.replace("Z", "+00:00")
+                            )
+                            break
+                        except ValueError:
+                            pass
+                if published_at:
+                    break
+
+        if published_at is None:
             published_at = datetime.now(timezone.utc)
 
         if published_at.tzinfo is None:
@@ -121,108 +136,51 @@ class GoogleNewsRSSProvider(AnnouncementProviderBase):
         if published_at < cutoff:
             return None
 
-        source = entry.get("source", {})
-        source_title = (
-            source.get("title", self.SOURCE_NAME)
-            if isinstance(source, dict)
-            else self.SOURCE_NAME
-        )
-
         return Announcement(
-            ticker=ticker,
-            company_name=company_name or source_title,
-            headline=entry.get("title", ""),
-            body=entry.get("summary", ""),
+            ticker="UNKNOWN",
+            company_name=item.get("displayLink", self.SOURCE_NAME),
+            headline=item.get("title", ""),
+            body=item.get("snippet", ""),
             published_at=published_at,
             source_url=link,
             source_name=self.SOURCE_NAME,
         )
 
     def get_recent_announcements(self, max_results: int = 50) -> List[Announcement]:
+        if not self.api_key or not self.cse_id:
+            print("  [GoogleCSE] Skipped: GOOGLE_CSE_KEY or GOOGLE_CSE_ID not set in .env")
+            return []
+
         announcements = []
         seen_urls: set = set()
 
-        # ------------------------------------------------------------------
-        # Phase 1: topic queries — broad discovery, no universe dependency
-        # ------------------------------------------------------------------
-        print(f"  [GoogleNews] Phase 1: running {len(self.TOPIC_QUERIES)} topic queries...")
+        print(f"  [GoogleCSE] Running {len(self.TOPIC_QUERIES)} topic queries...")
+
         for query in self.TOPIC_QUERIES:
-            entries = self._fetch_feed(query, self.RESULTS_PER_TOPIC)
-            before = len(announcements)
-            for entry in entries:
-                link = entry.get("link", "")
-                if link in seen_urls:
-                    continue
-                seen_urls.add(link)
-                ann = self._entry_to_announcement(entry)
-                if ann:
-                    announcements.append(ann)
-            print(f"  [GoogleNews] Phase 1:   '{query[:50]}' → {len(announcements) - before} items")
-
-        print(f"  [GoogleNews] Phase 1 complete: {len(announcements)} items total")
-        if len(announcements) == 0:
-            print("  [GoogleNews] WARNING: Phase 1 returned 0 items — "
-                  "Google News may be unreachable from this host.")
-
-        # ------------------------------------------------------------------
-        # Phase 2: per-company queries — targeted signal coverage
-        # ------------------------------------------------------------------
-        if self._universe_storage is None:
-            print("  [GoogleNews] Phase 2 skipped (no universe_storage provided)")
-            return announcements[:max_results]
-
-        companies = self._universe_storage.get_universe()
-        total = len(companies)
-        phase2_count = 0
-        print(f"  [GoogleNews] Phase 2: querying {total} universe companies "
-              f"({self.REQUEST_SLEEP}s/request, ~{round(total * self.REQUEST_SLEEP / 60)} min)...")
-
-        for i, company in enumerate(companies, 1):
-            if company.listing_exchange == "AIM":
-                query = f'"{company.company_name}" "AIM listed"'
-            else:
-                query = f'"{company.company_name}" LSE'
-
             time.sleep(self.REQUEST_SLEEP)
-            for entry in self._fetch_feed(query, self.RESULTS_PER_COMPANY):
-                link = entry.get("link", "")
+            items = self._fetch_news(query)
+            before = len(announcements)
+            for item in items:
+                link = item.get("link", "")
                 if link in seen_urls:
                     continue
                 seen_urls.add(link)
-                ann = self._entry_to_announcement(
-                    entry,
-                    ticker=company.ticker_lse,
-                    company_name=company.company_name,
-                )
+                ann = self._item_to_announcement(item)
                 if ann:
                     announcements.append(ann)
-                    phase2_count += 1
+            print(f"  [GoogleCSE]   '{query[:50]}' → {len(announcements) - before} items")
 
-            if i % self.PROGRESS_INTERVAL == 0 or i == total:
-                pct = round(100 * i / total)
-                print(f"  [GoogleNews] Phase 2: {i}/{total} ({pct}%) — "
-                      f"{phase2_count} items | last: [{company.ticker_lse}] {company.company_name[:30]}")
-
-        print(f"  [GoogleNews] Phase 2 complete: {phase2_count} items "
-              f"across {total} companies")
-
+        print(f"  [GoogleCSE] Complete: {len(announcements)} items from "
+              f"{len(self.TOPIC_QUERIES)} queries")
         return announcements
 
 
 if __name__ == "__main__":
-    from storage_firestore_universe import FirestoreUniverseProvider
-
-    universe_storage = FirestoreUniverseProvider()
-    provider = GoogleNewsRSSProvider(universe_storage=universe_storage)
+    provider = GoogleNewsProvider()
     results = provider.get_recent_announcements()
-    print(f"\nFetched {len(results)} announcements total\n")
-    known = [a for a in results if a.ticker != "UNKNOWN"]
-    unknown = [a for a in results if a.ticker == "UNKNOWN"]
-    print(f"  With ticker (Phase 2): {len(known)}")
-    print(f"  Without ticker (Phase 1): {len(unknown)}")
-    print()
-    for a in known[:10]:
-        print(f"  [{a.ticker}] {a.company_name}")
+    print(f"\nFetched {len(results)} announcements\n")
+    for a in results[:10]:
+        print(f"  {a.company_name}")
         print(f"  {a.headline[:80]}")
         print(f"  {a.published_at.date()}")
         print()
