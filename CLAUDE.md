@@ -25,7 +25,7 @@ provider inside pipeline logic, the UI layer, or another provider.
 
 | # | Abstraction | PoC Implementation | Purpose |
 |---|---|---|---|
-| 1 | `AnnouncementProviderBase` | `CompaniesHouseProvider` (active), `GoogleNewsProvider` (parked) | News and filing ingestion |
+| 1 | `AnnouncementProviderBase` | `CompaniesHouseProvider` (active), `LSEGExcelProvider` (active), `GoogleNewsProvider` (parked) | News and filing ingestion |
 | 2 | `LLMProviderBase` | `GeminiProvider` | Analysis and reasoning |
 | 3 | `NotificationProviderBase` | `TelegramNotifier` | Alert dispatch |
 | 4 | `StorageProviderBase` | `FirestoreProvider` | Signal/discovery results and deduplication |
@@ -43,13 +43,15 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 ./
 ├── CLAUDE.md
 ├── HANDOVER.md                       # Session handover notes — update at end of each session
+├── SOBER_ASSESSMENT_v1.md            # Post-PoC evaluation — gaps and upgrade path
 ├── .gitignore
 ├── backend/
 │   ├── abstractions.py               # All seven abstract base classes + dataclasses
-│   ├── pipeline.py                   # Core signal pipeline orchestration — daily entry point
+│   ├── pipeline.py                   # Core signal pipeline orchestration — daily cron entry point
+│   ├── job_runner.py                 # Interactive job queue worker — polls Firestore pending_jobs
+│   ├── lseg_excel_provider.py        # AnnouncementProviderBase — LSEG Excel ingestion
 │   ├── import_universe_csv.py        # Manual universe import: CSV → CH lookup → Firestore
 │   ├── universe.py                   # Static 5-company list — reference only, not used by pipeline
-│   ├── universe_pipeline.py          # DORMANT — PDF-based dynamic pipeline, do not run
 │   ├── lens_base_filters.py          # Shared universe pre-filter (passes_universe_filter)
 │   ├── lens_regulatory_catalyst.py   # Strategy Lens: regulatory/planning catalysts
 │   ├── storage_firestore.py          # StorageProviderBase implementation (Firestore)
@@ -58,15 +60,21 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 │   ├── llm_gemini.py                 # LLMProviderBase implementation
 │   ├── telegram_notifier.py          # NotificationProviderBase implementation
 │   ├── google_news_connector.py      # AnnouncementProviderBase — GoogleNewsProvider (parked, see HANDOVER.md)
+│   ├── newsapi_connector.py          # AnnouncementProviderBase — NewsAPI aggregator (parked)
 │   ├── companies_house_connector.py  # AnnouncementProviderBase — CH filing ingestion
+│   ├── systemd/
+│   │   └── job_runner.service        # systemd unit for always-on VM operation
+│   ├── tests/
+│   │   └── archive/                  # Archived yfinance tests (see archive/README.md)
 │   ├── requirements.txt              # Python dependencies
 │   └── .env                          # API keys — never commit, VM only
 ├── frontend/
-│   └── app.py                        # Streamlit interface — runs locally, not on VM
+│   ├── app.py                        # Streamlit interface — three tabs: Signals, Discovery, Ingest
+│   └── requirements.txt              # Streamlit Community Cloud dependencies
 └── docs/
     ├── AIM_data_complete_*.csv        # AIM universe source (date-versioned)
     ├── FTSE_AllShare_complete_*.csv   # FTSE All-Share universe source (date-versioned)
-    └── universe_pipeline_brief.md    # Universe pipeline specification (for reference)
+    └── LSEG_news_capture.xlsx         # Sample LSEG export (62 rows, 23 Feb 2026)
 ```
 
 **Rule:** never place backend logic in `frontend/` and never import from `backend/` inside `frontend/`. The Streamlit interface communicates with the backend exclusively via Firestore.
@@ -80,7 +88,7 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 - **Storage:** Cloud Firestore, Native mode, europe-west2, default database
 - **LLM:** Gemini API free tier (`gemini-2.0-flash`, `google-genai` package)
 - **Notifications:** Telegram (`python-telegram-bot`)
-- **Interface:** Streamlit, runs locally on Windows 11 WSL2 (Ubuntu), reads Firestore directly
+- **Interface:** Streamlit — deployable to Streamlit Community Cloud; runs locally on Windows 11 WSL2 (Ubuntu) for development. Reads/writes Firestore directly.
 
 ### Firestore Collections
 
@@ -91,6 +99,7 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 | `discovery_results` | Discovery queue LLM analysis results |
 | `universe_companies` | One document per company, keyed by `ticker_lse` |
 | `universe_refresh_log` | One document per pipeline refresh run |
+| `pending_jobs` | Interactive ingestion job queue — written by UI, consumed by job_runner |
 
 ---
 
@@ -166,10 +175,11 @@ cd ~/stock-research && source backend/venv/bin/activate
   exact match; 0.85–<1.0 = fuzzy. Dissolved/inactive companies are excluded from
   matching regardless of similarity score. The confidence flows through to
   `Announcement.companies_house_confidence` and into LLM prompts as a data quality note.
-- **Google News / CSE parked:** All free RSS sources return 503/429/404 from GCP IP
-  ranges. Google Custom Search JSON API returns 403 on the GCP free trial. Full history
-  in HANDOVER.md. `GoogleNewsProvider` in `google_news_connector.py` is intact but
-  commented out in `pipeline.py`. Reactivate by upgrading GCP account from free trial.
+- **Google News / CSE parked and reassessed:** All free RSS sources return 503/429/404
+  from GCP IP ranges. Google CSE was also reassessed as solving the wrong problem —
+  news aggregators are structurally late relative to RNS. See `SOBER_ASSESSMENT_v1.md`.
+  `GoogleNewsProvider` is intact but parked. The interactive LSEG Excel path now
+  provides genuine primary RNS access without a paid feed.
 - **Firestore universe is a snapshot:** `save_universe()` deletes stale documents after
   each write. Re-running `import_universe_csv.py` with a tighter filter will correctly
   remove previously-admitted companies from Firestore.
@@ -179,7 +189,9 @@ cd ~/stock-research && source backend/venv/bin/activate
 ## Current Build Status
 
 The signal pipeline is fully operational end-to-end. All seven abstractions are
-implemented. The universe is live in Firestore with 845 companies.
+implemented. The universe is live in Firestore with 845 companies. An interactive
+ingestion workflow (LSEG Excel → Firestore job queue) has been added alongside
+the autonomous cron pipeline.
 
 **Universe management (static CSV approach):**
 - `docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv` are the
@@ -191,14 +203,17 @@ implemented. The universe is live in Firestore with 845 companies.
 - `pipeline.py` reads the universe from Firestore at startup. **Raises RuntimeError
   if Firestore is empty** — there is no fallback to `universe.py`. Run
   `import_universe_csv.py` before the first pipeline run.
-- `universe_pipeline.py` is **dormant** — PDF-based dynamic pipeline, do not run.
 
-**News ingestion:**
-- `CompaniesHouseProvider` is the sole active announcement source. Fetches filing
-  history for the 671 CH-matched universe companies. Rate-limited at 0.6s/request.
-- `GoogleNewsProvider` is parked — all free news RSS sources block GCP IPs and the
-  Custom Search JSON API requires a non-trial GCP account. See HANDOVER.md for full
-  history and reactivation instructions.
+**News ingestion — two paths:**
+- **Autonomous (cron):** `CompaniesHouseProvider` fetches filing history for the 671
+  CH-matched universe companies daily. Rate-limited at 0.6s/request. Produces
+  secondary confirmation of RNS events (see `SOBER_ASSESSMENT_v1.md`).
+- **Interactive (job queue):** Human exports RNS announcements from LSEG web
+  interface, uploads Excel to the Ingest tab, selects items, pastes body text.
+  `job_runner.py` on the VM picks up the job from `pending_jobs` and runs full
+  LLM analysis. This path accesses primary RNS disclosure.
+- **Parked:** `GoogleNewsProvider` and `newsapi_connector.py` — structurally late
+  relative to RNS; assessed as solving the wrong problem. See HANDOVER.md.
 
 ## Commands
 
@@ -215,6 +230,16 @@ cd frontend && streamlit run app.py
 **Import universe from CSV into Firestore (run once, then re-run when CSVs are updated):**
 ```bash
 cd backend && python import_universe_csv.py
+```
+
+**Run the job runner (interactive ingestion worker):**
+```bash
+cd backend && python job_runner.py
+```
+
+**Test the LSEG Excel parser:**
+```bash
+cd backend && python lseg_excel_provider.py ../docs/LSEG_news_capture.xlsx
 ```
 
 **Test individual backend modules** (each has a `__main__` block):
@@ -271,7 +296,16 @@ Pre-filtering happens in two stages before LLM calls (to save cost and latency):
 
 ### Frontend (`frontend/app.py`)
 
-Streamlit dashboard with two tabs — **Signals** (actionable opportunities with full LLM output) and **Discovery Queue** (universe candidates). Reads directly from Firestore. Supports dismissing results (soft-archive) and shows statistics.
+Streamlit dashboard with three tabs:
+- **Signals** — actionable opportunities with full LLM output, dismiss capability
+- **Discovery Queue** — universe admission candidates
+- **Ingest** — LSEG Excel upload → pre-filter → body-paste → job submission → job status
+
+Sidebar: Universe Lookup (membership, CH confidence, signal count, most recent signal).
+
+Reads/writes Firestore directly. No backend imports. Deployable to Streamlit Community
+Cloud — credential loader tries `st.secrets["gcp_service_account"]` first, falls back
+to `GOOGLE_APPLICATION_CREDENTIALS` env var for local development.
 
 ### Monitored Universe
 
