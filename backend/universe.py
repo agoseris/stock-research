@@ -10,8 +10,8 @@ Fallback: the hand-picked UNIVERSE list below is used only if no CSV files are
 found in docs/ — this allows the pipeline to run on environments where the repo
 has not been fully deployed with the data files.
 
-The dynamic universe pipeline (universe_pipeline.py) is on hold pending a
-reliable free programmatic data source.
+The static CSV approach via import_universe_csv.py is the settled
+universe management method.
 """
 
 import csv

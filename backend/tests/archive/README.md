@@ -1,0 +1,1 @@
+These tests confirm that yfinance returns data for individual stock lookups at low request volumes. Bulk pipeline use is rate-limited and unreliable at universe scale. Per-signal on-demand lookups remain viable and the MarketDataProviderBase abstraction is retained for this reason.

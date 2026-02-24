@@ -273,8 +273,8 @@ def _build_universe_companies(rows: List[dict], run_timestamp: datetime) -> list
 
     All optional enrichment fields (sector, industry, price history, ADTV,
     ISIN) are left as None — this is a lightweight structural import, not a
-    full yfinance enrichment run. The dynamic pipeline (universe_pipeline.py)
-    will handle enrichment when it is reactivated.
+    full yfinance enrichment run. Enrichment fields remain out of scope
+    for this importer.
     """
     from abstractions import UniverseCompany
 
