@@ -25,7 +25,7 @@ provider inside pipeline logic, the UI layer, or another provider.
 
 | # | Abstraction | PoC Implementation | Purpose |
 |---|---|---|---|
-| 1 | `AnnouncementProviderBase` | `GoogleNewsRSSProvider`, `CompaniesHouseProvider` | News and filing ingestion |
+| 1 | `AnnouncementProviderBase` | `CompaniesHouseProvider` (active), `GoogleNewsProvider` (parked) | News and filing ingestion |
 | 2 | `LLMProviderBase` | `GeminiProvider` | Analysis and reasoning |
 | 3 | `NotificationProviderBase` | `TelegramNotifier` | Alert dispatch |
 | 4 | `StorageProviderBase` | `FirestoreProvider` | Signal/discovery results and deduplication |
@@ -57,7 +57,7 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 │   ├── market_data_yfinance.py       # MarketDataProviderBase implementation (dormant)
 │   ├── llm_gemini.py                 # LLMProviderBase implementation
 │   ├── telegram_notifier.py          # NotificationProviderBase implementation
-│   ├── google_news_connector.py      # AnnouncementProviderBase — two-phase RSS ingestion
+│   ├── google_news_connector.py      # AnnouncementProviderBase — GoogleNewsProvider (parked, see HANDOVER.md)
 │   ├── companies_house_connector.py  # AnnouncementProviderBase — CH filing ingestion
 │   ├── requirements.txt              # Python dependencies
 │   └── .env                          # API keys — never commit, VM only
@@ -89,8 +89,8 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 | `announcements` | SHA-256 headline fingerprints for cross-run deduplication |
 | `signal_results` | Signal queue LLM analysis results |
 | `discovery_results` | Discovery queue LLM analysis results |
-| `universe_companies` | NEW — one document per company, keyed by `ticker_lse` |
-| `universe_refresh_log` | NEW — one document per pipeline refresh run |
+| `universe_companies` | One document per company, keyed by `ticker_lse` |
+| `universe_refresh_log` | One document per pipeline refresh run |
 
 ---
 
@@ -166,9 +166,10 @@ cd ~/stock-research && source backend/venv/bin/activate
   exact match; 0.85–<1.0 = fuzzy. Dissolved/inactive companies are excluded from
   matching regardless of similarity score. The confidence flows through to
   `Announcement.companies_house_confidence` and into LLM prompts as a data quality note.
-- **Google News rate limiting:** Phase 2 (per-company queries) runs at 1.0s/request.
-  845 companies ≈ 14 minutes. Pipeline total runtime ~20–25 minutes. Plan scheduling
-  accordingly.
+- **Google News / CSE parked:** All free RSS sources return 503/429/404 from GCP IP
+  ranges. Google Custom Search JSON API returns 403 on the GCP free trial. Full history
+  in HANDOVER.md. `GoogleNewsProvider` in `google_news_connector.py` is intact but
+  commented out in `pipeline.py`. Reactivate by upgrading GCP account from free trial.
 - **Firestore universe is a snapshot:** `save_universe()` deletes stale documents after
   each write. Re-running `import_universe_csv.py` with a tighter filter will correctly
   remove previously-admitted companies from Firestore.
@@ -193,11 +194,11 @@ implemented. The universe is live in Firestore with 845 companies.
 - `universe_pipeline.py` is **dormant** — PDF-based dynamic pipeline, do not run.
 
 **News ingestion:**
-- `GoogleNewsRSSProvider` runs in two phases: 5 topic queries (discovery) + one
-  per-company query for all 845 universe members (signal coverage). Phase 2 takes
-  ~14 minutes at 1.0s/request rate limit.
-- `CompaniesHouseProvider` fetches filing history for companies with a matched CH
-  number. Rate-limited at 0.6s/request.
+- `CompaniesHouseProvider` is the sole active announcement source. Fetches filing
+  history for the 671 CH-matched universe companies. Rate-limited at 0.6s/request.
+- `GoogleNewsProvider` is parked — all free news RSS sources block GCP IPs and the
+  Custom Search JSON API requires a non-trial GCP account. See HANDOVER.md for full
+  history and reactivation instructions.
 
 ## Commands
 
@@ -225,7 +226,7 @@ python lens_regulatory_catalyst.py      # Test regulatory catalyst strategy
 python storage_firestore.py             # Test Firestore connectivity
 python llm_gemini.py                    # Test Gemini API
 python telegram_notifier.py             # Test Telegram channel
-python google_news_connector.py         # Test Google News RSS provider
+python google_news_connector.py         # Test Google News provider (parked — requires CSE keys)
 python companies_house_connector.py     # Test Companies House API
 ```
 

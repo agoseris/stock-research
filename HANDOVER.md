@@ -1,7 +1,7 @@
 # Session Handover
 **Date:** 23 February 2026
 **Branch:** `master`
-**Last commit:** `9ad048e` — "Park GoogleNewsProvider: GCP free trial blocks Custom Search JSON API"
+**Last commit:** `18bd277` — "Update HANDOVER.md: settled pipeline state as of 23 Feb 2026"
 
 ---
 
