@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.1"
+VERSION = "1.2"
 
 # ---------------------------------------------------------------------------
 # Announcement type exclusion list — shared with backend/lseg_excel_provider.py
@@ -489,7 +489,7 @@ def _parse_lseg_excel(file_bytes, universe_tickers):
             continue
 
         # Parse Col 1: "[Company] - [Ticker] - [Announcement Type]"
-        parts = str(col1_val).split(" - ", maxsplit=2)
+        parts = str(col1_val).replace("\xa0", " ").split(" - ", maxsplit=2)
         company = parts[0].strip() if parts else ""
         ticker = parts[1].strip() if len(parts) > 1 else ""
         ann_type = parts[2].strip() if len(parts) > 2 else ""

@@ -183,7 +183,7 @@ class LSEGExcelProvider(AnnouncementProviderBase):
         Announcement type may itself contain " - " (e.g. "Director/PDMR Shareholding - Grant").
         Split on the first two " - " separators only.
         """
-        parts = value.split(" - ", maxsplit=2)
+        parts = value.replace("\xa0", " ").split(" - ", maxsplit=2)
         if len(parts) < 3:
             company = parts[0].strip() if parts else ""
             ticker = parts[1].strip() if len(parts) > 1 else ""
