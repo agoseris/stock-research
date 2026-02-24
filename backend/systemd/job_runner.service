@@ -1,0 +1,23 @@
+[Unit]
+Description=Stock Research Job Runner
+Documentation=https://github.com/agoseris/stock-research
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=danjmorris
+WorkingDirectory=/home/danjmorris/stock-research/backend
+ExecStart=/home/danjmorris/stock-research/backend/venv/bin/python job_runner.py
+Restart=on-failure
+RestartSec=15s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=job_runner
+
+# Allow up to 3 restarts within 60 seconds before systemd gives up
+StartLimitInterval=60s
+StartLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

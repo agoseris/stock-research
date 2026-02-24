@@ -9,13 +9,42 @@ Run with:
     streamlit run app.py
 """
 
+import io
 import os
+from datetime import date, datetime, time, timezone
+
+import openpyxl
 import streamlit as st
-from datetime import datetime
 from google.cloud import firestore
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+# ---------------------------------------------------------------------------
+# Announcement type exclusion list — shared with backend/lseg_excel_provider.py
+# Extend here without touching filter logic. Match is case-insensitive substring.
+# ---------------------------------------------------------------------------
+
+EXCLUDED_ANNOUNCEMENT_TYPES = [
+    "Holding(s) in Company",
+    "TR-1",
+    "Transaction in Own Shares",
+    "Notice of AGM",
+    "Notice of Results",
+    "Annual Report",
+    "Half-Year Report",
+    "Interim Report",
+    "Confirmation Statement",
+    "Change of Registered Office",
+    "Change of Nominated Adviser",
+    "Change of Broker",
+    "Total Voting Rights",
+    "Blocklisting Interim Review",
+    "Publication of Prospectus",
+    "Result of AGM",
+]
+
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -248,6 +277,24 @@ html, body, [class*="css"] {
 
 @st.cache_resource
 def get_db():
+    """
+    Create a Firestore client.
+
+    On Streamlit Community Cloud: reads GCP credentials from
+    st.secrets["gcp_service_account"] (set in the Streamlit dashboard).
+    Locally: falls through to GOOGLE_APPLICATION_CREDENTIALS env var.
+    """
+    try:
+        if "gcp_service_account" in st.secrets:
+            from google.oauth2 import service_account
+            sa_info = dict(st.secrets["gcp_service_account"])
+            creds = service_account.Credentials.from_service_account_info(
+                sa_info,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            return firestore.Client(credentials=creds, project=sa_info.get("project_id"))
+    except Exception:
+        pass
     return firestore.Client()
 
 
@@ -299,6 +346,196 @@ def dismiss_document(db, collection, doc_id):
         "dismissed": True,
         "dismissed_at": datetime.utcnow().isoformat(),
     })
+
+
+# ── Universe and job helpers ───────────────────────────────────────────────────
+
+@st.cache_data(ttl=300)
+def get_universe_tickers(_db):
+    """Fetch the set of all LSE tickers in the Firestore universe. Cached for 5 minutes."""
+    docs = _db.collection("universe_companies").select([]).stream()
+    return {doc.id for doc in docs}
+
+
+def get_universe_company(db, ticker):
+    """Return the universe_companies document for a ticker, or None."""
+    doc = db.collection("universe_companies").document(ticker.upper()).get()
+    return doc.to_dict() if doc.exists else None
+
+
+def get_ticker_signal_count(db, ticker):
+    """Return (count, most_recent_dict_or_None) for signals recorded against a ticker."""
+    docs = list(
+        db.collection("signal_results")
+        .where("ticker", "==", ticker.upper())
+        .order_by("stored_at", direction=firestore.Query.DESCENDING)
+        .limit(50)
+        .stream()
+    )
+    return len(docs), docs[0].to_dict() if docs else None
+
+
+def get_pending_jobs(db, limit=20):
+    """Return recent pending_jobs documents, newest first."""
+    docs = (
+        db.collection("pending_jobs")
+        .order_by("submitted_at", direction=firestore.Query.DESCENDING)
+        .limit(limit)
+        .stream()
+    )
+    return [(doc.id, doc.to_dict()) for doc in docs]
+
+
+def submit_job(db, row_dict, body):
+    """Write a job document to the pending_jobs collection."""
+    job = {
+        "status": "pending",
+        "submitted_at": firestore.SERVER_TIMESTAMP,
+        "processed_at": None,
+        "ticker": row_dict["ticker"],
+        "company_name": row_dict["company_name"],
+        "headline": f"{row_dict['company_name']} — {row_dict['announcement_type']}",
+        "body": body,
+        "source_url": row_dict["source_url"],
+        "published_at": row_dict["published_at"],
+        "price": row_dict["price_pence"],
+        "price_change": row_dict["price_change_pct"],
+        "error": None,
+    }
+    db.collection("pending_jobs").add(job)
+
+
+# ── Excel parsing ──────────────────────────────────────────────────────────────
+# Note: this duplicates the logic in backend/lseg_excel_provider.py.
+# frontend/app.py must not import from backend/ (Streamlit Community Cloud
+# deployment constraint). Both copies must be kept in sync.
+
+def _parse_lseg_excel(file_bytes, universe_tickers):
+    """
+    Parse LSEG Excel export bytes and apply pre-filters.
+
+    Returns a dict with keys: passed, discovery, suppressed, skipped_source, total_rows.
+    Each row is a plain dict (not a dataclass) suitable for Streamlit display.
+
+    Filtering order:
+      1. Source filter   — only RNS rows proceed
+      2. Universe filter — non-universe rows route to discovery
+      3. Type filter     — EXCLUDED_ANNOUNCEMENT_TYPES suppressed (logged)
+    """
+
+    def _parse_dt(date_val, time_val):
+        if isinstance(date_val, str):
+            try:
+                d = datetime.strptime(date_val.strip(), "%d.%m.%y").date()
+            except ValueError:
+                d = datetime.now(timezone.utc).date()
+        elif isinstance(date_val, datetime):
+            d = date_val.date()
+        elif isinstance(date_val, date):
+            d = date_val
+        else:
+            d = datetime.now(timezone.utc).date()
+
+        if isinstance(time_val, time):
+            t = time_val
+        elif isinstance(time_val, str):
+            try:
+                t = datetime.strptime(time_val.strip(), "%H:%M:%S").time()
+            except ValueError:
+                t = time(0, 0, 0)
+        else:
+            t = time(0, 0, 0)
+
+        return datetime.combine(d, t, tzinfo=timezone.utc)
+
+    def _parse_price(val):
+        if val is None or val == "-" or val == "":
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    ws = wb.active
+
+    passed, discovery, suppressed = [], [], []
+    skipped_source = 0
+    total_rows = 0
+
+    for row in ws.iter_rows(min_row=1):
+        if all(cell.value is None for cell in row):
+            continue
+        total_rows += 1
+        cells = list(row)
+
+        def cv(idx):
+            return cells[idx].value if idx < len(cells) else None
+
+        col1_val = cv(0)
+        source_val = str(cv(1) or "").strip()
+        date_val = cv(2)
+        time_val = cv(3)
+        price_val = cv(4)
+        price_change_val = cv(5)
+
+        if not col1_val:
+            continue
+
+        # Filter 1: Source
+        if source_val.upper() != "RNS":
+            skipped_source += 1
+            continue
+
+        # Parse Col 1: "[Company] - [Ticker] - [Announcement Type]"
+        parts = str(col1_val).split(" - ", maxsplit=2)
+        company = parts[0].strip() if parts else ""
+        ticker = parts[1].strip() if len(parts) > 1 else ""
+        ann_type = parts[2].strip() if len(parts) > 2 else ""
+
+        hyperlink = cells[0].hyperlink
+        source_url = hyperlink.target if hyperlink and hyperlink.target else ""
+
+        published_at = _parse_dt(date_val, time_val)
+        price_pence = _parse_price(price_val)
+        price_change_pct = str(price_change_val).strip() if price_change_val not in (None, "-", "") else None
+
+        row_dict = {
+            "ticker": ticker,
+            "company_name": company,
+            "announcement_type": ann_type,
+            "source": source_val,
+            "published_at": published_at,
+            "price_pence": price_pence,
+            "price_change_pct": price_change_pct,
+            "source_url": source_url,
+            "in_universe": ticker in universe_tickers,
+        }
+
+        # Filter 2: Universe
+        if not row_dict["in_universe"]:
+            discovery.append(row_dict)
+            continue
+
+        # Filter 3: Announcement type
+        ann_lower = ann_type.lower()
+        excluded_match = next(
+            (ex for ex in EXCLUDED_ANNOUNCEMENT_TYPES if ex.lower() in ann_lower),
+            None,
+        )
+        if excluded_match:
+            suppressed.append((row_dict, f"Announcement type excluded: '{excluded_match}'"))
+            continue
+
+        passed.append(row_dict)
+
+    return {
+        "passed": passed,
+        "discovery": discovery,
+        "suppressed": suppressed,
+        "skipped_source": skipped_source,
+        "total_rows": total_rows,
+    }
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -417,9 +654,10 @@ st.markdown(f"""
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 
-tab_signals, tab_discovery = st.tabs([
+tab_signals, tab_discovery, tab_ingest = st.tabs([
     f"Signals  [{len(signals)}]",
     f"Discovery Queue  [{len(discoveries)}]",
+    "Ingest",
 ])
 
 # ── Signals tab ────────────────────────────────────────────────────────────────
@@ -510,3 +748,218 @@ with tab_discovery:
                 if st.button("Dismiss", key=f"dismiss_disc_{doc_id}"):
                     dismiss_document(db, "discovery_results", doc_id)
                     st.rerun()
+
+# ── Ingest tab ─────────────────────────────────────────────────────────────────
+
+with tab_ingest:
+
+    # ── Section 1: Upload and Pre-filter ──────────────────────────────────────
+
+    st.markdown(
+        '<div class="terminal-header" style="margin-bottom:0.8rem;">Step 1 — Upload LSEG Export</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Export from LSEG: Market News → filter Source=RNS, Market=AIM/Small Cap → Export to Excel. "
+        "Upload the .xlsx file here."
+    )
+
+    uploaded_file = st.file_uploader(
+        "LSEG Excel export (.xlsx)",
+        type=["xlsx"],
+        label_visibility="collapsed",
+    )
+
+    if uploaded_file is not None:
+        # Only re-parse when a new file is uploaded
+        if st.session_state.get("ingest_file_name") != uploaded_file.name:
+            universe_tickers = get_universe_tickers(db)
+            file_bytes = uploaded_file.read()
+            st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers)
+            st.session_state["ingest_file_name"] = uploaded_file.name
+            st.session_state.pop("ingest_submitted", None)
+
+    if "ingest_result" in st.session_state:
+        result = st.session_state["ingest_result"]
+        passed = result["passed"]
+        disc = result["discovery"]
+        supp = result["suppressed"]
+
+        # Summary
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Total rows", result["total_rows"])
+        c2.metric("Skipped (non-RNS)", result["skipped_source"])
+        c3.metric("Passed filters", len(passed))
+        c4.metric("Discovery candidates", len(disc))
+        c5.metric("Suppressed (type)", len(supp))
+
+        # Passed rows table
+        if passed:
+            import pandas as pd
+
+            df = pd.DataFrame([{
+                "Ticker": r["ticker"],
+                "Company": r["company_name"],
+                "Type": r["announcement_type"],
+                "Time": r["published_at"].strftime("%H:%M") if r["published_at"] else "—",
+                "Price (p)": r["price_pence"] if r["price_pence"] is not None else "—",
+                "Change": r["price_change_pct"] if r["price_change_pct"] else "—",
+                "URL": r["source_url"],
+            } for r in passed])
+
+            st.dataframe(
+                df,
+                column_config={
+                    "URL": st.column_config.LinkColumn("URL", display_text="Open ↗"),
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
+        else:
+            st.markdown(
+                '<div class="empty-state">NO ROWS PASSED FILTERS</div>',
+                unsafe_allow_html=True,
+            )
+
+        # Suppressed rows (collapsed detail)
+        if supp:
+            with st.expander(f"Suppressed rows ({len(supp)})"):
+                for row_dict, reason in supp:
+                    st.caption(f"[{row_dict['ticker']}] {row_dict['announcement_type']} — {reason}")
+
+        # Discovery candidates (collapsed detail)
+        if disc:
+            with st.expander(f"Discovery candidates ({len(disc)}) — not in universe"):
+                for row_dict in disc:
+                    url_part = f"  [{row_dict['source_url']}]({row_dict['source_url']})" if row_dict["source_url"] else ""
+                    st.caption(f"[{row_dict['ticker']}] {row_dict['company_name']} — {row_dict['announcement_type']}{url_part}")
+
+        # ── Section 2: Submit for Analysis ────────────────────────────────────
+
+        if passed:
+            st.markdown("---")
+            st.markdown(
+                '<div class="terminal-header" style="margin-bottom:0.8rem;">Step 2 — Submit for Analysis</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                "Open the announcement on LSEG, read it, paste the full body text below, then submit. "
+                "The VM will pick up the job and run LLM analysis. Results appear in the Signals tab."
+            )
+
+            if "ingest_submitted" not in st.session_state:
+                st.session_state["ingest_submitted"] = set()
+
+            for idx, row_dict in enumerate(passed):
+                label = f"[{row_dict['ticker']}]  {row_dict['company_name']} — {row_dict['announcement_type']}"
+
+                with st.expander(label):
+                    if idx in st.session_state["ingest_submitted"]:
+                        st.success(f"Submitted — [{row_dict['ticker']}] {row_dict['announcement_type']}")
+                        continue
+
+                    if row_dict["source_url"]:
+                        st.markdown(f"[Open on LSEG ↗]({row_dict['source_url']})")
+
+                    body_key = f"ingest_body_{idx}"
+                    body = st.text_area(
+                        "Paste announcement body",
+                        key=body_key,
+                        height=150,
+                        placeholder="Copy and paste the full announcement text from LSEG here...",
+                        label_visibility="collapsed",
+                    )
+
+                    if st.button(
+                        "Submit for analysis",
+                        key=f"ingest_submit_{idx}",
+                        disabled=not (body or "").strip(),
+                    ):
+                        submit_job(db, row_dict, body)
+                        st.session_state["ingest_submitted"].add(idx)
+                        st.rerun()
+
+    # ── Section 3: Job Status ──────────────────────────────────────────────────
+
+    st.markdown("---")
+    hdr_col, refresh_col = st.columns([10, 1])
+    with hdr_col:
+        st.markdown(
+            '<div class="terminal-header" style="margin-bottom:0.8rem;">Step 3 — Job Status</div>',
+            unsafe_allow_html=True,
+        )
+    with refresh_col:
+        if st.button("↺ Refresh", key="ingest_refresh_jobs"):
+            st.rerun()
+
+    try:
+        jobs = get_pending_jobs(db)
+    except Exception as e:
+        jobs = []
+        st.caption(f"Could not load jobs: {e}")
+
+    if not jobs:
+        st.caption("No jobs found in pending_jobs collection.")
+    else:
+        status_colours = {
+            "pending": "#f7a84a",
+            "processing": "#7eb8f7",
+            "complete": "#4af7a0",
+            "failed": "#c0392b",
+        }
+        for job_id, job in jobs:
+            status = job.get("status", "—")
+            ticker = job.get("ticker", "—")
+            headline = job.get("headline", "—")
+            colour = status_colours.get(status, "#3d5166")
+            error = job.get("error")
+
+            st.markdown(
+                f'<div style="padding:0.5rem 0;border-bottom:1px solid #1a2535;">'
+                f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.65rem;'
+                f'color:{colour};text-transform:uppercase;margin-right:1rem;">{status}</span>'
+                f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.7rem;'
+                f'color:#7eb8f7;">[{ticker}]</span>'
+                f'<span style="font-size:0.8rem;margin-left:0.5rem;color:#8aabcc;">{headline}</span>'
+                f'{f"<br><span style=\'font-size:0.7rem;color:#c0392b;margin-left:1rem;\'>{error}</span>" if error else ""}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+# ── Sidebar: Universe Lookup ───────────────────────────────────────────────────
+
+with st.sidebar:
+    st.markdown(
+        '<div class="terminal-header" style="margin-bottom:0.6rem;">Universe Lookup</div>',
+        unsafe_allow_html=True,
+    )
+
+    lookup_input = st.text_input(
+        "Ticker",
+        key="universe_lookup_input",
+        placeholder="e.g. GMR",
+        label_visibility="collapsed",
+    )
+
+    if st.button("Look up", key="universe_lookup_btn") and lookup_input.strip():
+        ticker_q = lookup_input.strip().upper()
+        company_data = get_universe_company(db, ticker_q)
+
+        if company_data:
+            st.success(f"**{ticker_q}** is in the universe")
+            ch_conf = company_data.get("companies_house_confidence")
+            ch_num = company_data.get("companies_house_number")
+            if ch_conf is not None:
+                st.caption(f"CH confidence: {ch_conf:.2f}  |  CH number: {ch_num or '—'}")
+            try:
+                sig_count, latest = get_ticker_signal_count(db, ticker_q)
+                st.caption(f"Signals recorded: {sig_count}")
+                if latest:
+                    ts = format_timestamp(latest.get("analysed_at", ""))
+                    headline = latest.get("headline", "")
+                    st.caption(f"Most recent: {ts}")
+                    st.caption(headline[:100] + "…" if len(headline) > 100 else headline)
+            except Exception:
+                st.caption("Signal count unavailable.")
+        else:
+            st.warning(f"**{ticker_q}** is not in the universe")

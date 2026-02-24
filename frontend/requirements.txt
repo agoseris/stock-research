@@ -1,0 +1,6 @@
+streamlit
+google-cloud-firestore
+google-auth
+openpyxl
+pandas
+python-dotenv
