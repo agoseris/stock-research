@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 # ---------------------------------------------------------------------------
 # Announcement type exclusion list — shared with backend/lseg_excel_provider.py
@@ -530,12 +530,14 @@ def _parse_lseg_excel(file_bytes, universe_tickers):
 
         passed.append(row_dict)
 
+    all_tickers = [r["ticker"] for r in passed + discovery + [r for r, _ in suppressed]]
     return {
         "passed": passed,
         "discovery": discovery,
         "suppressed": suppressed,
         "skipped_source": skipped_source,
         "total_rows": total_rows,
+        "_debug_tickers": all_tickers[:10],
     }
 
 
@@ -777,6 +779,7 @@ with tab_ingest:
             universe_tickers = get_universe_tickers(db)
             st.caption(f"DEBUG: universe tickers loaded = {len(universe_tickers)}"
                        + (f", sample: {', '.join(list(universe_tickers)[:5])}" if universe_tickers else ""))
+
             file_bytes = uploaded_file.read()
             st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers)
             st.session_state["ingest_file_name"] = uploaded_file.name
@@ -787,6 +790,10 @@ with tab_ingest:
         passed = result["passed"]
         disc = result["discovery"]
         supp = result["suppressed"]
+        _dbg_tickers = result.get("_debug_tickers", [])
+        if _dbg_tickers:
+            _dbg_hits = [t for t in _dbg_tickers if t in get_universe_tickers(db)]
+            st.caption(f"DEBUG: first 10 parsed tickers = {_dbg_tickers}  |  universe hits = {_dbg_hits}")
 
         # Summary
         c1, c2, c3, c4, c5 = st.columns(5)
