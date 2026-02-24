@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+VERSION = "1.0"
 
 # ---------------------------------------------------------------------------
 # Announcement type exclusion list — shared with backend/lseg_excel_provider.py
@@ -595,7 +596,7 @@ def format_timestamp(ts_str):
 
 db = get_db()
 
-st.markdown('<div class="terminal-header">LSE Small-Cap Research System · Regulatory Catalyst Lens</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="terminal-header">LSE Small-Cap Research System · Regulatory Catalyst Lens · v{VERSION}</div>', unsafe_allow_html=True)
 st.markdown('<div class="page-title">Research Terminal</div>', unsafe_allow_html=True)
 st.markdown('<div class="page-subtitle">Signals surfaced by autonomous pipeline · Dismiss to archive · Universe expands only through explicit decision</div>', unsafe_allow_html=True)
 
