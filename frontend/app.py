@@ -774,6 +774,8 @@ with tab_ingest:
         # Only re-parse when a new file is uploaded
         if st.session_state.get("ingest_file_name") != uploaded_file.name:
             universe_tickers = get_universe_tickers(db)
+            st.caption(f"DEBUG: universe tickers loaded = {len(universe_tickers)}"
+                       + (f", sample: {', '.join(list(universe_tickers)[:5])}" if universe_tickers else ""))
             file_bytes = uploaded_file.read()
             st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers)
             st.session_state["ingest_file_name"] = uploaded_file.name
