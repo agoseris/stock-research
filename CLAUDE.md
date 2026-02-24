@@ -134,6 +134,17 @@ cd ~/stock-research && source backend/venv/bin/activate
 
 ---
 
+## Frontend Version Number — Mandatory Rule
+
+The `VERSION` constant in `frontend/app.py` (line ~23) **must be incremented on every
+edit to that file.** Use semantic patch bumping: `1.0` → `1.1` → `1.2` etc.
+When the major workflow changes significantly, bump the minor version: `1.9` → `2.0`.
+
+This rule exists so the deployed Streamlit UI always reflects the exact code version,
+making it immediately obvious whether a deploy has taken effect.
+
+---
+
 ## Key Design Principles
 
 1. **Anti-bias:** no implicit preference learning. All adaptation is explicit,
