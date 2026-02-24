@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.2"
+VERSION = "1.3"
 
 # ---------------------------------------------------------------------------
 # Announcement type exclusion list — shared with backend/lseg_excel_provider.py
@@ -530,14 +530,12 @@ def _parse_lseg_excel(file_bytes, universe_tickers):
 
         passed.append(row_dict)
 
-    all_tickers = [r["ticker"] for r in passed + discovery + [r for r, _ in suppressed]]
     return {
         "passed": passed,
         "discovery": discovery,
         "suppressed": suppressed,
         "skipped_source": skipped_source,
         "total_rows": total_rows,
-        "_debug_tickers": all_tickers[:10],
     }
 
 
@@ -777,9 +775,6 @@ with tab_ingest:
         # Only re-parse when a new file is uploaded
         if st.session_state.get("ingest_file_name") != uploaded_file.name:
             universe_tickers = get_universe_tickers(db)
-            st.caption(f"DEBUG: universe tickers loaded = {len(universe_tickers)}"
-                       + (f", sample: {', '.join(list(universe_tickers)[:5])}" if universe_tickers else ""))
-
             file_bytes = uploaded_file.read()
             st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers)
             st.session_state["ingest_file_name"] = uploaded_file.name
@@ -790,11 +785,6 @@ with tab_ingest:
         passed = result["passed"]
         disc = result["discovery"]
         supp = result["suppressed"]
-        _dbg_tickers = result.get("_debug_tickers", [])
-        if _dbg_tickers:
-            _dbg_hits = [t for t in _dbg_tickers if t in get_universe_tickers(db)]
-            st.caption(f"DEBUG: first 10 parsed tickers = {_dbg_tickers}  |  universe hits = {_dbg_hits}")
-
         # Summary
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Total rows", result["total_rows"])
@@ -864,12 +854,12 @@ with tab_ingest:
                 label = f"[{row_dict['ticker']}]  {row_dict['company_name']} — {row_dict['announcement_type']}"
 
                 with st.expander(label):
+                    if row_dict["source_url"]:
+                        st.markdown(f"[Open on LSEG ↗]({row_dict['source_url']})")
+
                     if idx in st.session_state["ingest_submitted"]:
                         st.success(f"Submitted — [{row_dict['ticker']}] {row_dict['announcement_type']}")
                         continue
-
-                    if row_dict["source_url"]:
-                        st.markdown(f"[Open on LSEG ↗]({row_dict['source_url']})")
 
                     body_key = f"ingest_body_{idx}"
                     body = st.text_area(
