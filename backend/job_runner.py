@@ -34,6 +34,7 @@ load_dotenv()
 
 from abstractions import Announcement
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
 from storage_firestore import FirestoreProvider
@@ -328,7 +329,7 @@ REASON: [one sentence]"""
             try:
                 docs = list(
                     self.db.collection("pending_jobs")
-                    .where("status", "==", "pending")
+                    .where(filter=FieldFilter("status", "==", "pending"))
                     .order_by("submitted_at")
                     .limit(MAX_JOBS_PER_POLL)
                     .stream()
