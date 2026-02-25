@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.4"
+VERSION = "1.5"
 
 # ---------------------------------------------------------------------------
 # Announcement type exclusion list — shared with backend/lseg_excel_provider.py
@@ -29,8 +29,6 @@ VERSION = "1.4"
 
 EXCLUDED_ANNOUNCEMENT_TYPES = [
     "Holding(s) in Company",
-    "TR-1",
-    "Transaction in Own Shares",
     "Notice of AGM",
     "Notice of Results",
     "Annual Report",

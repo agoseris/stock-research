@@ -39,8 +39,6 @@ from abstractions import Announcement, AnnouncementProviderBase, UniverseStorage
 
 EXCLUDED_ANNOUNCEMENT_TYPES = [
     "Holding(s) in Company",
-    "TR-1",
-    "Transaction in Own Shares",
     "Notice of AGM",
     "Notice of Results",
     "Annual Report",
