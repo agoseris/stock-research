@@ -64,10 +64,11 @@ class FirestoreProvider(StorageProviderBase):
     def save_announcement(self, announcement: Announcement) -> bool:
         """
         Persist an announcement to the deduplication store.
-        Document ID is a fingerprint of the normalised headline.
+        Document ID is a fingerprint of the source_url (if present) or the headline.
         """
         try:
-            fp = self._fingerprint(announcement.headline)
+            key_text = announcement.source_url if announcement.source_url else announcement.headline
+            fp = self._fingerprint(key_text)
             doc_ref = self.db.collection(self.ANNOUNCEMENTS_COLLECTION).document(fp)
             doc_ref.set({
                 "ticker": announcement.ticker,
@@ -83,19 +84,17 @@ class FirestoreProvider(StorageProviderBase):
             print(f"  [Firestore] save_announcement failed: {e}")
             return False
 
-    def announcement_exists(self, source_url: str) -> bool:
+    def announcement_exists(self, source_url: str, headline: str = "") -> bool:
         """
-        Check deduplication store by source_url.
-        Returns True if this URL has already been processed.
+        Check deduplication store by source_url (or headline if URL is empty).
+        Uses direct document ID lookup — fast, no index required.
+        Returns True if this announcement has already been processed.
         """
         try:
-            results = (
-                self.db.collection(self.ANNOUNCEMENTS_COLLECTION)
-                .where("source_url", "==", source_url)
-                .limit(1)
-                .stream()
-            )
-            return any(True for _ in results)
+            key_text = source_url if source_url else headline
+            fp = self._fingerprint(key_text)
+            doc = self.db.collection(self.ANNOUNCEMENTS_COLLECTION).document(fp).get()
+            return doc.exists
         except Exception as e:
             print(f"  [Firestore] announcement_exists failed: {e}")
             return False
