@@ -7,13 +7,13 @@
 
 ## Current State
 
-App is at **v2.4**. The pipeline is fully operational end-to-end. The Ingest tab has
-been overhauled with a unified announcement table (v2.4) and the deduplication system
-has been fixed to use URL-based fingerprinting.
+App is at **v2.7**. The pipeline is fully operational end-to-end. The Ingest tab has
+been overhauled with a unified announcement table and the deduplication system has been
+fixed to use URL-based fingerprinting. Several post-launch bugs have been fixed.
 
 ---
 
-## What Was Built / Changed This Session (v2.4)
+## What Was Built / Changed This Session (v2.4–v2.7)
 
 ### Deduplication Fix (backend)
 
@@ -54,6 +54,62 @@ Cleared on new file upload alongside `ingest_cache_key`.
 `_get_processed_source_urls(db)` — `@st.cache_data(ttl=60)` — returns set of
 `source_url` values already in the `announcements` collection. Used to show "✓ Analysed"
 indicator on already-processed rows.
+
+### Post-Launch Bug Fixes (v2.5–v2.7)
+
+**v2.5 — Streamlit magic write SyntaxError**
+The data cell render loop used a bare ternary expression
+(`col.caption(val) if is_muted else col.markdown(...)`). Streamlit's magic write
+intercepted it as a value to display, triggering `ast.parse` → `SyntaxError`.
+Fixed by replacing with an explicit `if/else` statement.
+
+**v2.6 — Promote-to-Passed did not remove row from Discovery**
+`row.copy()` retained the `_row_id` key added at build time, so
+`discovery.remove(orig)` never matched the stored dict and silently failed.
+Fixed by parsing the index from `_row_id` (format `d_{idx}`) and using
+`list.pop(idx)` directly.
+
+**v2.7 — Stale exclusion list cache not cleared by direct Firestore edits**
+The `@st.cache_data(ttl=60)` cache on `get_exclusion_list` is only cleared by
+`save_exclusion_list()` (called via Config tab `×` button). Edits made directly
+in the Firestore console bypass this, leaving the parse cache stale for up to
+60 seconds. Fixed by force-clearing `get_exclusion_list` and `get_company_keywords`
+caches at the start of every file upload, so the parse always uses fresh Firestore data.
+
+---
+
+## Frontend Refactoring — Deferred
+
+`frontend/app.py` is currently ~1,400 lines (a single monolithic file). This is
+normal for Streamlit due to its top-to-bottom re-execution model, but the file is
+at a size where it warrants eventual refactoring.
+
+**Decision: defer until the Ingest tab is stable and before the next major feature
+addition** (e.g. director/insider buying lens, new tab).
+
+**Recommended future structure:**
+
+```
+frontend/
+├── app.py                  # ~150 lines: page config, db init, tab routing only
+├── styles.css              # extracted CSS block (~200 lines, currently inline)
+├── firestore_helpers.py    # all Firestore read/write/cache functions (no st.* calls)
+├── parse_lseg.py           # _parse_lseg_excel() — pure logic, no st.* calls
+└── tabs/
+    ├── signals.py          # render_signals_tab(db)
+    ├── discovery.py        # render_discovery_tab(db)
+    ├── universe.py         # render_universe_tab(db)
+    ├── ingest.py           # render_ingest_tab(db)
+    └── config.py           # render_config_tab(db)
+```
+
+**Highest-value first step when refactoring begins:** extract `firestore_helpers.py`
+— it's pure Python with no `st.*` calls, zero regression risk, and immediately
+reduces `app.py` by ~250 lines.
+
+**Constraint:** `frontend/` cannot import from `backend/` (Streamlit Community Cloud
+deployment). `parse_lseg.py` must remain a separate copy of the backend parse logic
+(already the case today).
 
 ---
 
