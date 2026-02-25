@@ -59,6 +59,17 @@ EXCLUDED_ANNOUNCEMENT_TYPES = [
 ]
 
 
+# Company name keywords that indicate investment trusts, funds, or non-operating
+# entities. Applied as a case-insensitive substring match against the company name
+# parsed from Col 1. Matched rows are routed to suppressed (auditable), not discarded.
+TRUST_COMPANY_KEYWORDS = [
+    "trust",
+    "income",
+    "growth",
+    "fund",
+]
+
+
 def load_exclusion_list(db) -> list:
     """
     Load the exclusion list from Firestore app_config/lseg_filters.
@@ -264,6 +275,15 @@ class LSEGExcelProvider(AnnouncementProviderBase):
             return None
         return str(val).strip()
 
+    @staticmethod
+    def _matches_trust_keyword(company_name: str) -> Optional[str]:
+        """Return the matching keyword if company_name suggests an investment trust or fund, else None."""
+        name_lower = company_name.lower()
+        for kw in TRUST_COMPANY_KEYWORDS:
+            if kw in name_lower:
+                return kw
+        return None
+
     def _matches_exclusion(self, ann_type: str) -> Optional[str]:
         """
         Return the matching exclusion string if ann_type is on the exclusion list,
@@ -352,6 +372,14 @@ class LSEGExcelProvider(AnnouncementProviderBase):
             if not row_obj.in_universe:
                 discovery.append(row_obj)
                 print(f"  [DISCOVERY] [{ticker}] {company_name} — {ann_type}")
+                continue
+
+            # --- Filter 2.5: Trust / fund company name ---
+            trust_match = self._matches_trust_keyword(company_name)
+            if trust_match:
+                reason = f"Company name suggests investment trust/fund: '{trust_match}'"
+                suppressed.append((row_obj, reason))
+                print(f"  [SUPPRESSED {reason}] [{ticker}] {company_name}")
                 continue
 
             # --- Filter 3: Announcement type ---

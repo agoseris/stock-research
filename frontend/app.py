@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.7"
+VERSION = "1.8"
 
 
 
@@ -440,6 +440,10 @@ def submit_job(db, row_dict, body):
 # frontend/app.py must not import from backend/ (Streamlit Community Cloud
 # deployment constraint). Both copies must be kept in sync.
 
+# Mirrors TRUST_COMPANY_KEYWORDS in lseg_excel_provider.py.
+_TRUST_COMPANY_KEYWORDS = ["trust", "income", "growth", "fund"]
+
+
 def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types):
     """
     Parse LSEG Excel export bytes and apply pre-filters.
@@ -545,6 +549,15 @@ def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types):
         # Filter 2: Universe
         if not row_dict["in_universe"]:
             discovery.append(row_dict)
+            continue
+
+        # Filter 2.5: Trust / fund company name
+        trust_match = next(
+            (kw for kw in _TRUST_COMPANY_KEYWORDS if kw in company.lower()),
+            None,
+        )
+        if trust_match:
+            suppressed.append((row_dict, f"Company name suggests investment trust/fund: '{trust_match}'"))
             continue
 
         # Filter 3: Announcement type

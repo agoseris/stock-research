@@ -100,6 +100,7 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 | `universe_companies` | One document per company, keyed by `ticker_lse` |
 | `universe_refresh_log` | One document per pipeline refresh run |
 | `pending_jobs` | Interactive ingestion job queue — written by UI, consumed by job_runner |
+| `app_config` | Application configuration — document `lseg_filters` holds `excluded_announcement_types` list; seeded from `_DEFAULT_EXCLUDED_TYPES` on first app load, editable live via Sidebar → Filtration Rules |
 
 ---
 
