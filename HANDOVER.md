@@ -1,7 +1,7 @@
 # Session Handover
 **Date:** 25 February 2026
 **Branch:** `master`
-**Last commit:** pending (this session's work)
+**Last commit:** d434ef8 — Fix ingest cache: re-parse Excel when exclusion list changes (v1.7)
 
 ---
 
@@ -9,56 +9,61 @@
 
 The pipeline is fully operational end-to-end. The interactive LSEG Excel ingestion
 workflow is working correctly in production (Streamlit Community Cloud + VM job runner).
-Two signals were successfully generated and confirmed in the Signals tab during this
-session.
+Step 12 (Preference and Context Store) is now partially implemented — the filtration
+rules config store is live.
 
 ---
 
 ## What Was Fixed / Built This Session
 
-### Firestore Fixes (job runner)
+### Filter Tuning — COMPLETED
 
-| Issue | Fix |
-|---|---|
-| `UserWarning: positional .where() arguments` | Updated to `filter=FieldFilter(...)` syntax |
-| `Poll error: 400 — query requires an index` | Created composite index on `pending_jobs (status ASC, submitted_at ASC)` via Firebase Console link in error message |
+Reviewed the full list of announcement types passing the pre-filter using the 23 Feb
+2026 dump. Key insight: the "type" field in LSEG Col 1 is **not a controlled taxonomy**
+for genuine business announcements — it is the free-form RNS headline. Only admin
+filings use consistent taxonomy labels (TR-1, Holding(s) in Company, etc.).
 
-### Streamlit Community Cloud Deployment
+Consequence: the exclusion list should only target confirmed, consistently-labelled
+LSEG admin types. Trying to block types like "Contract Award" or "Acquisition" is
+wrong — those appear as free-form headlines and would never match.
 
-- App deployed and confirmed working at `share.streamlit.io`
-- `gcp_service_account` secret added (TOML format — see below)
-- Initial `OSError` on first load was a typo in the secret — corrected by user
+**Changes made:**
+- Added `Director Declaration` and `Conversion of B Shares` to exclusion list (v1.4)
+- Removed `TR-1` and `Transaction in Own Shares` from exclusion list after review:
+  - TR-1 upward crossings = informed party building a position = on-thesis
+  - Buybacks = management capital deployment = on-thesis
+  - LLM is better placed to evaluate these case-by-case (v1.5)
 
-### LSEG Excel Parser Fix (`\xa0` non-breaking space)
+### Sidebar Fix
 
-**Root cause:** LSEG Excel exports use `\xa0` (non-breaking space) as the separator
-between ticker and announcement type in Col 1, not a regular space. The `" - ".split()`
-only fired once, concatenating ticker + type into a single field (e.g.
-`"PULS -\xa0Holding(s) in Company"` instead of `"PULS"`). Zero rows were passing the
-universe filter as a result.
+**Root cause:** `initial_sidebar_state="collapsed"` + `header { visibility: hidden; }`
+CSS hid the sidebar toggle button (inside `<header>`).
 
-**Fix:** `.replace("\xa0", " ")` before splitting, applied in both:
-- `frontend/app.py` `_parse_lseg_excel()`
-- `backend/lseg_excel_provider.py` `_parse_col1()`
+**Fix:** `initial_sidebar_state="expanded"` + CSS override
+`[data-testid="collapsedControl"] { visibility: visible !important; }` (v1.6)
 
-### UI Improvements
+### Step 12 — Preference and Context Store (partial)
 
-- `VERSION` constant added to `frontend/app.py` (currently `1.3`). Displayed in
-  terminal header. **Must be incremented on every edit** — see CLAUDE.md rule.
-- LSEG URL now remains visible after job submission (previously hidden by `continue`)
-- Debug lines removed (were added temporarily to diagnose the `\xa0` issue)
+**New Firestore collection: `app_config`**
+- Document `lseg_filters`: `{ "excluded_announcement_types": [...] }`
+- Seeds from `_DEFAULT_EXCLUDED_TYPES` on first app load if document absent
 
-### Filter Tuning — Pending
+**Frontend (`frontend/app.py`):**
+- `get_exclusion_list(_db)` — loads from Firestore, cached 60s, seeds on first run
+- `save_exclusion_list(db, excluded_types)` — writes to Firestore, clears cache
+- Removed hardcoded `EXCLUDED_ANNOUNCEMENT_TYPES` constant
+- `_parse_lseg_excel()` now receives `excluded_types` as parameter
+- Ingest parse cache keyed on `(filename, tuple(excluded_types))` — exclusion list
+  changes automatically trigger re-parse (v1.7 fix)
+- **Sidebar — Filtration Rules section:** live view of exclusion list with per-entry
+  `×` remove button and Add input; writes to Firestore immediately
 
-293 rows are correctly suppressed; 263 pass to Step 2. However, some announcement
-types are passing that are purely administrative with no investment signal value.
-Identified so far:
-
-- `Director Declaration` — director appointment/resignation. Should be suppressed.
-
-**Next session:** review the full list of passing announcement types and extend
-`EXCLUDED_ANNOUNCEMENT_TYPES` in both `frontend/app.py` and
-`backend/lseg_excel_provider.py`. Both copies must stay in sync.
+**Backend (`backend/lseg_excel_provider.py`):**
+- `LSEGExcelProvider.__init__` accepts optional `excluded_types: List[str]`
+  — falls back to module-level constant if not injected
+- `_matches_exclusion` is now an instance method using `self._excluded_types`
+- `load_exclusion_list(db)` module-level helper for Firestore load with fallback
+- `__main__` test block loads from Firestore when available; graceful fallback
 
 ---
 
@@ -75,7 +80,59 @@ Identified so far:
 | Notifications | Live | Telegram |
 | Dashboard | Live | Streamlit Community Cloud — three tabs: Signals, Discovery Queue, Ingest |
 | Cron schedule | Live | 07:00 UTC daily, logs to `~/pipeline.log` |
-| Streamlit Community Cloud | Live | Deployed and confirmed working |
+| Streamlit Community Cloud | Live | Deployed and confirmed working, v1.7 |
+
+---
+
+## Current Exclusion List (source of truth: Firestore app_config/lseg_filters)
+
+Manageable via sidebar Filtration Rules panel:
+
+| Type | Rationale |
+|---|---|
+| `Holding(s) in Company` | Passive shareholding disclosure |
+| `Notice of AGM` | Pre-meeting admin |
+| `Notice of Results` | Pre-results admin |
+| `Annual Report` | Statutory filing |
+| `Half-Year Report` | Statutory filing |
+| `Interim Report` | Statutory filing |
+| `Confirmation Statement` | Companies House admin |
+| `Change of Registered Office` | Admin |
+| `Change of Nominated Adviser` | Admin |
+| `Change of Broker` | Admin |
+| `Total Voting Rights` | Monthly admin disclosure |
+| `Blocklisting Interim Review` | Admin |
+| `Publication of Prospectus` | Admin/legal |
+| `Result of AGM` | Post-vote admin |
+| `Director Declaration` | Admin filing |
+| `Conversion of B Shares` | Admin corporate action |
+
+**Intentionally NOT excluded:** `TR-1` (major holdings crossings = on-thesis),
+`Transaction in Own Shares` (buybacks = management confidence = on-thesis).
+
+---
+
+## Ingest Tab — Pre-filter Behaviour
+
+The exclusion list lives in Firestore `app_config/lseg_filters`. Changes via the
+sidebar Filtration Rules panel take effect immediately — the parse cache is keyed on
+`(filename, tuple(excluded_types))` so any edit triggers a re-parse.
+
+With the 23 Feb 2026 full AIM + Small Cap dump (653 rows):
+- 69 skipped (non-RNS)
+- 293 suppressed by type filter
+- 263 passed to Step 2
+- 28 routed to Discovery
+
+---
+
+## Step 12 — Preference and Context Store (partial)
+
+**Done:** Filtration rules config store. Firestore `app_config` collection established
+as the pattern for future preferences.
+
+**Remaining:** LLM parameters, universe criteria, notification thresholds, investment
+thesis parameters. These can be added as further documents in `app_config`.
 
 ---
 
@@ -154,24 +211,6 @@ crontab -l
 
 ---
 
-## Ingest Tab — Pre-filter Behaviour
-
-The `EXCLUDED_ANNOUNCEMENT_TYPES` list in both `backend/lseg_excel_provider.py` and
-`frontend/app.py` controls what is suppressed at the type filter stage.
-**Both copies must be kept in sync.** The list is a configurable constant — extend it
-without modifying filter logic.
-
-With the 23 Feb 2026 full AIM + Small Cap dump (653 rows):
-- 69 skipped (non-RNS)
-- 293 suppressed by type filter
-- 263 passed to Step 2
-- 28 routed to Discovery
-
-**Known gap:** `Director Declaration` is passing but should be suppressed. Review and
-extend the list at the start of the next session.
-
----
-
 ## Pending Jobs Document Structure
 
 Written by `frontend/app.py` `submit_job()`:
@@ -232,8 +271,7 @@ To refresh the universe with updated CSV files:
 
 | Item | Status |
 |---|---|
-| Extend `EXCLUDED_ANNOUNCEMENT_TYPES` — `Director Declaration` + full review | **Next session — Priority 1** |
 | RNS direct feed (EODHD ~$19–79/mo) | Not yet investigated — Priority 1 paid upgrade |
 | Director/Insider buying lens workshop | Requires RNS feed — manual workshop viable now |
 | Historic signal impact analysis | Prerequisite: RNS feed + price data |
-| Preference and Context Store (Step 12) | Not yet built — prerequisite for full autonomy |
+| Step 12: extend config store to LLM params, universe criteria, thesis params | Foundation in place — `app_config` collection established |
