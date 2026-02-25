@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.6"
+VERSION = "1.7"
 
 
 
@@ -801,13 +801,14 @@ with tab_ingest:
     )
 
     if uploaded_file is not None:
-        # Only re-parse when a new file is uploaded
-        if st.session_state.get("ingest_file_name") != uploaded_file.name:
+        # Re-parse when the file changes OR when the exclusion list has changed.
+        excluded_types = get_exclusion_list(db)
+        ingest_cache_key = (uploaded_file.name, tuple(excluded_types))
+        if st.session_state.get("ingest_cache_key") != ingest_cache_key:
             universe_tickers = get_universe_tickers(db)
-            excluded_types = get_exclusion_list(db)
             file_bytes = uploaded_file.read()
             st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers, excluded_types)
-            st.session_state["ingest_file_name"] = uploaded_file.name
+            st.session_state["ingest_cache_key"] = ingest_cache_key
             st.session_state.pop("ingest_submitted", None)
 
     if "ingest_result" in st.session_state:
