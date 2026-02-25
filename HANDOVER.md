@@ -1,69 +1,45 @@
 # Session Handover
 **Date:** 25 February 2026
 **Branch:** `master`
-**Last commit:** d434ef8 — Fix ingest cache: re-parse Excel when exclusion list changes (v1.7)
+**Last commit:** 64b7479 — Feat: add 'trst' and 'grwth' to trust/fund company name filter (v2.1)
 
 ---
 
 ## Current State
 
-The pipeline is fully operational end-to-end. The interactive LSEG Excel ingestion
-workflow is working correctly in production (Streamlit Community Cloud + VM job runner).
-Step 12 (Preference and Context Store) is now partially implemented — the filtration
-rules config store is live.
+The pipeline is fully operational end-to-end. Signals are being analysed and surfaced
+via the Streamlit UI and Telegram. The interactive LSEG Excel ingestion workflow is
+confirmed working in production. The system "works" but the UI needs refinement —
+that is the primary next task.
 
 ---
 
-## What Was Fixed / Built This Session
+## What Was Built / Changed This Session
 
-### Filter Tuning — COMPLETED
+### Trust / Fund Company Name Filter (Filter 2.5)
 
-Reviewed the full list of announcement types passing the pre-filter using the 23 Feb
-2026 dump. Key insight: the "type" field in LSEG Col 1 is **not a controlled taxonomy**
-for genuine business announcements — it is the free-form RNS headline. Only admin
-filings use consistent taxonomy labels (TR-1, Holding(s) in Company, etc.).
+A new filter stage was added to the LSEG Excel parse pipeline, sitting between the
+universe filter (Filter 2) and the announcement type filter (Filter 3).
 
-Consequence: the exclusion list should only target confirmed, consistently-labelled
-LSEG admin types. Trying to block types like "Contract Award" or "Acquisition" is
-wrong — those appear as free-form headlines and would never match.
+**Mechanism:** case-insensitive substring match on the parsed company name.
 
-**Changes made:**
-- Added `Director Declaration` and `Conversion of B Shares` to exclusion list (v1.4)
-- Removed `TR-1` and `Transaction in Own Shares` from exclusion list after review:
-  - TR-1 upward crossings = informed party building a position = on-thesis
-  - Buybacks = management capital deployment = on-thesis
-  - LLM is better placed to evaluate these case-by-case (v1.5)
+**Keywords (both copies must be kept in sync):**
+- `backend/lseg_excel_provider.py` → `TRUST_COMPANY_KEYWORDS`
+- `frontend/app.py` → `_TRUST_COMPANY_KEYWORDS`
 
-### Sidebar Fix
+Current keywords: `["trust", "trst", "income", "growth", "grwth", "fund"]`
 
-**Root cause:** `initial_sidebar_state="collapsed"` + `header { visibility: hidden; }`
-CSS hid the sidebar toggle button (inside `<header>`).
+Matched rows route to `suppressed` (auditable), not silently discarded.
 
-**Fix:** `initial_sidebar_state="expanded"` + CSS override
-`[data-testid="collapsedControl"] { visibility: visible !important; }` (v1.6)
+### Ingest Table — Date Column Added
 
-### Step 12 — Preference and Context Store (partial)
+The passed-rows table in the Ingest tab now shows `Date` (`dd Mon`) immediately before
+`Time`, so announcements can be placed in chronological context without counting on the
+user remembering which day the file was exported.
 
-**New Firestore collection: `app_config`**
-- Document `lseg_filters`: `{ "excluded_announcement_types": [...] }`
-- Seeds from `_DEFAULT_EXCLUDED_TYPES` on first app load if document absent
+### Streamlit Deprecation Fix
 
-**Frontend (`frontend/app.py`):**
-- `get_exclusion_list(_db)` — loads from Firestore, cached 60s, seeds on first run
-- `save_exclusion_list(db, excluded_types)` — writes to Firestore, clears cache
-- Removed hardcoded `EXCLUDED_ANNOUNCEMENT_TYPES` constant
-- `_parse_lseg_excel()` now receives `excluded_types` as parameter
-- Ingest parse cache keyed on `(filename, tuple(excluded_types))` — exclusion list
-  changes automatically trigger re-parse (v1.7 fix)
-- **Sidebar — Filtration Rules section:** live view of exclusion list with per-entry
-  `×` remove button and Add input; writes to Firestore immediately
-
-**Backend (`backend/lseg_excel_provider.py`):**
-- `LSEGExcelProvider.__init__` accepts optional `excluded_types: List[str]`
-  — falls back to module-level constant if not injected
-- `_matches_exclusion` is now an instance method using `self._excluded_types`
-- `load_exclusion_list(db)` module-level helper for Firestore load with fallback
-- `__main__` test block loads from Firestore when available; graceful fallback
+`use_container_width=True` → `width="stretch"` on the Ingest dataframe.
 
 ---
 
@@ -80,7 +56,60 @@ CSS hid the sidebar toggle button (inside `<header>`).
 | Notifications | Live | Telegram |
 | Dashboard | Live | Streamlit Community Cloud — three tabs: Signals, Discovery Queue, Ingest |
 | Cron schedule | Live | 07:00 UTC daily, logs to `~/pipeline.log` |
-| Streamlit Community Cloud | Live | Deployed and confirmed working, v1.7 |
+| Streamlit Community Cloud | Live | Deployed and confirmed working, v2.1 |
+
+---
+
+## Next Steps (Prioritised)
+
+### 1. UI Refinement — PRIMARY NEXT TASK
+
+The UI "works" but has not been reviewed systematically against actual usage. The plan
+is to walk through each function in the interface and assess:
+
+- **Signals tab:** card layout, LLM output formatting, dismiss flow, sort order
+- **Discovery Queue tab:** card layout, Recommend Add badge, dismiss flow
+- **Ingest tab:**
+  - Step 1 (upload + parse): table layout, column widths, filter summary metrics
+  - Step 2 (submit for analysis): expander UX, body-paste flow, submission feedback,
+    job status polling
+- **Sidebar:**
+  - Universe Lookup: result display, edge cases (not found, no signals)
+  - Filtration Rules: exclusion list display and edit UX
+
+No architectural changes required for this phase — it is purely a UX/display pass.
+
+### 2. Trust / Fund Keywords — Make Maintainable via UI (SECONDARY)
+
+Currently `TRUST_COMPANY_KEYWORDS` / `_TRUST_COMPANY_KEYWORDS` are hardcoded in both
+`lseg_excel_provider.py` and `frontend/app.py`. The pattern for making them
+user-editable already exists — the announcement type exclusion list uses the same
+Firestore + sidebar approach.
+
+**Proposed implementation:**
+- Store keywords in Firestore `app_config/lseg_filters` as a new field:
+  `excluded_company_keywords: [...]`
+- Seed from `TRUST_COMPANY_KEYWORDS` constant on first load (same pattern as
+  `excluded_announcement_types`)
+- Load in `frontend/app.py` alongside the existing exclusion list
+- Pass to `_parse_lseg_excel()` as a new parameter; include in parse cache key
+- Add a "Company Name Keywords" section to the sidebar Filtration Rules panel
+  (same × remove + Add input pattern)
+- `LSEGExcelProvider.__init__` accepts optional `trust_keywords: List[str]` parameter
+  (falls back to module constant if not injected)
+- `load_exclusion_list(db)` → extend to also return `excluded_company_keywords`, or
+  add a parallel `load_company_keywords(db)` helper
+
+This is a clean extension of the existing config store pattern. No new abstractions needed.
+
+### 3. Remaining Pinned Items
+
+| Item | Status |
+|---|---|
+| RNS direct feed (EODHD ~$19–79/mo) | Not yet investigated — Priority 1 paid upgrade |
+| Director/Insider buying lens workshop | Requires RNS feed — manual workshop viable now |
+| Historic signal impact analysis | Prerequisite: RNS feed + price data |
+| Step 12: extend config store to LLM params, universe criteria, thesis params | Foundation in place — `app_config` collection established |
 
 ---
 
@@ -118,7 +147,7 @@ The exclusion list lives in Firestore `app_config/lseg_filters`. Changes via the
 sidebar Filtration Rules panel take effect immediately — the parse cache is keyed on
 `(filename, tuple(excluded_types))` so any edit triggers a re-parse.
 
-With the 23 Feb 2026 full AIM + Small Cap dump (653 rows):
+With the 23 Feb 2026 full AIM + Small Cap dump (653 rows, pre-trust filter):
 - 69 skipped (non-RNS)
 - 293 suppressed by type filter
 - 263 passed to Step 2
@@ -164,13 +193,13 @@ requires literal `\n` characters preserved.
 
 ```bash
 # Connect
-ssh danjmorris@<vm-ip>
+ssh gcp-backend   # IAP tunnel alias defined in ~/.ssh/config
 
 # Activate venv
 source ~/stock-research/backend/venv/bin/activate
 
-# Deploy latest code
-cd ~/stock-research && git pull
+# Deploy latest code (pull + restart job_runner)
+~/deploy.sh
 
 # Run pipeline manually
 cd ~/stock-research/backend && python pipeline.py
@@ -264,14 +293,3 @@ To refresh the universe with updated CSV files:
 | `abstractions.py` | All seven abstract base classes + dataclasses |
 | `universe.py` | Static 5-company list — reference only, not used by pipeline |
 | `systemd/job_runner.service` | systemd unit for VM autostart |
-
----
-
-## Pinned Items
-
-| Item | Status |
-|---|---|
-| RNS direct feed (EODHD ~$19–79/mo) | Not yet investigated — Priority 1 paid upgrade |
-| Director/Insider buying lens workshop | Requires RNS feed — manual workshop viable now |
-| Historic signal impact analysis | Prerequisite: RNS feed + price data |
-| Step 12: extend config store to LLM params, universe criteria, thesis params | Foundation in place — `app_config` collection established |
