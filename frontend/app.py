@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.9"
+VERSION = "2.0"
 
 
 
@@ -858,7 +858,7 @@ with tab_ingest:
                     "URL": st.column_config.LinkColumn("URL", display_text="Open ↗"),
                 },
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.markdown(
