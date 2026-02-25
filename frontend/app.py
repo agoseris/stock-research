@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.5"
+VERSION = "2.6"
 
 
 
@@ -1292,14 +1292,13 @@ with tab_ingest:
                     st.rerun()
 
                 if col_b.button("→ Pass", key=f"promote_btn_{i}", help="Promote to Passed"):
-                    # Move row from discovery to passed in session state
-                    orig = row.copy()
-                    orig.pop("outcome", None)
-                    orig.pop("reason", None)
-                    try:
-                        st.session_state["ingest_result"]["discovery"].remove(orig)
-                    except (ValueError, AttributeError):
-                        pass
+                    # _row_id is "d_{idx}" — use idx to splice the exact element out
+                    disc_idx = int(row["_row_id"].split("_", 1)[1])
+                    disc_list = st.session_state["ingest_result"]["discovery"]
+                    if 0 <= disc_idx < len(disc_list):
+                        orig = disc_list.pop(disc_idx)
+                    else:
+                        orig = {k: v for k, v in row.items() if k not in ("outcome", "reason", "_row_id")}
                     st.session_state["ingest_result"]["passed"].append(orig)
                     st.rerun()
 
