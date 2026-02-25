@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.4"
+VERSION = "2.5"
 
 
 
@@ -1213,10 +1213,13 @@ with tab_ingest:
                 (c_price,   price_str),
                 (c_chg,     chg_str),
             ]:
-                col.caption(val) if is_muted else col.markdown(
-                    f'<span style="font-size:0.8rem;">{val}</span>',
-                    unsafe_allow_html=True,
-                )
+                if is_muted:
+                    col.caption(val)
+                else:
+                    col.markdown(
+                        f'<span style="font-size:0.8rem;">{val}</span>',
+                        unsafe_allow_html=True,
+                    )
 
             # URL link
             src_url = row.get("source_url", "")
