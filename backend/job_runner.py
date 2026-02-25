@@ -23,6 +23,7 @@ For always-on operation, use the systemd service:
     backend/systemd/job_runner.service
 """
 
+import os
 import sys
 import time
 from datetime import datetime, timezone
@@ -32,8 +33,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from abstractions import Announcement
+from abstractions import Announcement, UniverseCompany
 from google.cloud import firestore
+from import_universe_csv import _lookup_ch_number
 from google.cloud.firestore_v1.base_query import FieldFilter
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
@@ -254,6 +256,65 @@ REASON: [one sentence]"""
                 break
 
     # ------------------------------------------------------------------
+    # Universe admission
+    # ------------------------------------------------------------------
+
+    def _process_universe_admit_job(self, job_id: str, job: dict):
+        """
+        Handle a universe_admit job: run CH lookup and upsert the company.
+
+        job fields: ticker, company_name, market_cap_gbp (optional),
+                    listing_exchange, not_of_interest (bool), source_discovery_id (optional).
+        """
+        ticker = job.get("ticker", "").strip().upper()
+        company_name = job.get("company_name", "")
+        market_cap_gbp = job.get("market_cap_gbp") or None
+        listing_exchange = job.get("listing_exchange", "AIM")
+        not_of_interest = job.get("not_of_interest", False)
+        source_discovery_id = job.get("source_discovery_id")
+
+        print(f"\n[{_ts()}] --- universe_admit {job_id[:8]} ---")
+        print(f"  [{ticker}] {company_name}  not_of_interest={not_of_interest}")
+
+        try:
+            api_key = os.environ.get("COMPANIES_HOUSE_KEY", "")
+            ch_number, ch_confidence = None, 0.0
+            if api_key:
+                ch_number, ch_confidence = _lookup_ch_number(company_name, api_key)
+
+            now = datetime.now(timezone.utc)
+            company = UniverseCompany(
+                ticker_lse=ticker,
+                ticker_yahoo=f"{ticker}.L",
+                company_name=company_name,
+                tier=1 if listing_exchange == "LSE_MAIN" else 2,
+                listing_exchange=listing_exchange,
+                entity_type="OPERATING",
+                liquidity_flag="LIQUID" if listing_exchange == "LSE_MAIN" else "ILLIQUID",
+                universe_added_date=now.date(),
+                last_refreshed=now,
+                market_cap_gbp=market_cap_gbp,
+                companies_house_number=ch_number,
+                companies_house_confidence=ch_confidence if ch_number else None,
+                not_of_interest=not_of_interest,
+            )
+            self.universe_storage.save_company(company)
+            if not not_of_interest:
+                self._universe_tickers.add(ticker)
+
+            if source_discovery_id:
+                self.db.collection("discovery_results").document(source_discovery_id).update(
+                    {"dismissed": True, "dismissed_at": now.isoformat()}
+                )
+
+            self._complete_job(job_id, note=f"admitted: CH={'matched' if ch_number else 'none'}")
+            print(f"  [{ticker}] Admitted. CH: {ch_number or 'none'} ({ch_confidence:.2f})")
+
+        except Exception as e:
+            print(f"  [{ticker}] universe_admit failed: {e}")
+            self._fail_job(job_id, str(e))
+
+    # ------------------------------------------------------------------
     # Job processing
     # ------------------------------------------------------------------
 
@@ -275,6 +336,11 @@ REASON: [one sentence]"""
 
     def _process_job(self, job_id: str, job: dict):
         """Process a single pending job end-to-end."""
+        job_type = job.get("job_type", "lseg_ingest")
+        if job_type == "universe_admit":
+            self._process_universe_admit_job(job_id, job)
+            return
+
         ticker = job.get("ticker", "UNKNOWN")
         headline = job.get("headline", "")
 

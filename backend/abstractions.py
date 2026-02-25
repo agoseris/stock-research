@@ -193,6 +193,7 @@ class UniverseCompany:
     # Confidence 1.0 = exact match; lower = fuzzy; None = no match found.
     companies_house_number: Optional[str] = None
     companies_house_confidence: Optional[float] = None
+    not_of_interest: bool = False
 
 
 @dataclass
@@ -335,4 +336,9 @@ class UniverseStorageProviderBase(ABC):
         Returns None if no runs have been logged yet or if storage is
         unavailable.
         """
+        pass
+
+    @abstractmethod
+    def save_company(self, company: UniverseCompany) -> None:
+        """Upsert a single company without affecting other universe documents."""
         pass

@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.2"
+VERSION = "2.3"
 
 
 
@@ -30,7 +30,7 @@ st.set_page_config(
     page_title="LSE Research Terminal",
     page_icon="📡",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ── Styling ────────────────────────────────────────────────────────────────────
@@ -47,8 +47,6 @@ html, body, [class*="css"] {
 
 /* Hide Streamlit chrome */
 #MainMenu, footer, header { visibility: hidden; }
-/* Keep sidebar toggle visible despite hidden header */
-[data-testid="collapsedControl"] { visibility: visible !important; }
 .block-container { padding: 2rem 2.5rem 2rem 2.5rem; max-width: 1400px; }
 
 /* Terminal header */
@@ -328,14 +326,11 @@ def dismiss_document(db, collection, doc_id):
     })
 
 
-# ── Universe and job helpers ───────────────────────────────────────────────────
-
 # ── Config store ───────────────────────────────────────────────────────────────
 
 _CONFIG_COLLECTION = "app_config"
 _LSEG_FILTERS_DOC = "lseg_filters"
 
-# Seed list used when the Firestore document does not yet exist.
 _DEFAULT_EXCLUDED_TYPES = [
     "Holding(s) in Company",
     "Notice of AGM",
@@ -358,24 +353,17 @@ _DEFAULT_EXCLUDED_TYPES = [
 
 @st.cache_data(ttl=60)
 def get_exclusion_list(_db):
-    """
-    Load the announcement type exclusion list from Firestore app_config/lseg_filters.
-    Seeds the field from _DEFAULT_EXCLUDED_TYPES if it does not exist.
-    Cached for 60 seconds so UI edits propagate quickly.
-    """
     ref = _db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC)
     doc = ref.get()
     if doc.exists:
         data = doc.to_dict()
         if "excluded_announcement_types" in data:
             return data["excluded_announcement_types"]
-    # Field missing or document doesn't exist — seed it
     ref.set({"excluded_announcement_types": _DEFAULT_EXCLUDED_TYPES}, merge=True)
     return list(_DEFAULT_EXCLUDED_TYPES)
 
 
 def save_exclusion_list(db, excluded_types):
-    """Persist the exclusion list to Firestore and invalidate the cache."""
     db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC).set(
         {"excluded_announcement_types": excluded_types}, merge=True
     )
@@ -387,29 +375,24 @@ _DEFAULT_COMPANY_KEYWORDS = ["trust", "trst", "income", "growth", "grwth", "fund
 
 @st.cache_data(ttl=60)
 def get_company_keywords(_db):
-    """
-    Load the company name keyword filter from Firestore app_config/lseg_filters.
-    Seeds the field from _DEFAULT_COMPANY_KEYWORDS if it does not exist.
-    Cached for 60 seconds so UI edits propagate quickly.
-    """
     ref = _db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC)
     doc = ref.get()
     if doc.exists:
         data = doc.to_dict()
         if "excluded_company_keywords" in data:
             return data["excluded_company_keywords"]
-    # Field missing or document doesn't exist — seed it
     ref.set({"excluded_company_keywords": _DEFAULT_COMPANY_KEYWORDS}, merge=True)
     return list(_DEFAULT_COMPANY_KEYWORDS)
 
 
 def save_company_keywords(db, keywords):
-    """Persist the company keyword list to Firestore and invalidate the cache."""
     db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC).set(
         {"excluded_company_keywords": keywords}, merge=True
     )
     get_company_keywords.clear()
 
+
+# ── Universe helpers ───────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300)
 def get_universe_tickers(_db):
@@ -418,23 +401,66 @@ def get_universe_tickers(_db):
     return {doc.id for doc in docs}
 
 
-def get_universe_company(db, ticker):
-    """Return the universe_companies document for a ticker, or None."""
-    doc = db.collection("universe_companies").document(ticker.upper()).get()
-    return doc.to_dict() if doc.exists else None
-
-
-def get_ticker_signal_count(db, ticker):
-    """Return (count, most_recent_dict_or_None) for signals recorded against a ticker."""
-    docs = list(
-        db.collection("signal_results")
-        .where("ticker", "==", ticker.upper())
-        .order_by("stored_at", direction=firestore.Query.DESCENDING)
-        .limit(50)
+@st.cache_data(ttl=300)
+def get_not_of_interest_tickers(_db) -> set:
+    """Return set of tickers where not_of_interest == True. Cached for 5 minutes."""
+    docs = (
+        _db.collection("universe_companies")
+        .where("not_of_interest", "==", True)
+        .select([])
         .stream()
     )
-    return len(docs), docs[0].to_dict() if docs else None
+    return {doc.id for doc in docs}
 
+
+@st.cache_data(ttl=300)
+def get_all_universe_companies(_db) -> list:
+    """Load all universe_companies documents as a list of dicts. Cached for 5 minutes."""
+    docs = _db.collection("universe_companies").stream()
+    return [doc.to_dict() for doc in docs]
+
+
+@st.cache_data(ttl=300)
+def get_universe_stats(_db) -> dict:
+    """Return summary counts for the Universe tab stats bar. Cached for 5 minutes."""
+    companies = get_all_universe_companies(_db)
+    total = len(companies)
+    aim = sum(1 for c in companies if c.get("listing_exchange") == "AIM")
+    ftse = sum(1 for c in companies if c.get("listing_exchange") == "LSE_MAIN")
+    ch_matched = sum(1 for c in companies if c.get("companies_house_number"))
+    muted = sum(1 for c in companies if c.get("not_of_interest", False))
+    return {"total": total, "aim": aim, "ftse": ftse, "ch_matched": ch_matched, "muted": muted}
+
+
+def mark_not_of_interest(db, ticker: str, value: bool):
+    """Set the not_of_interest flag on a universe company and clear related caches."""
+    db.collection("universe_companies").document(ticker.upper()).set(
+        {"not_of_interest": value}, merge=True
+    )
+    get_not_of_interest_tickers.clear()
+    get_all_universe_companies.clear()
+    get_universe_stats.clear()
+
+
+def submit_universe_admit_job(db, ticker, company_name, market_cap_gbp,
+                               listing_exchange, not_of_interest=False,
+                               source_discovery_id=None):
+    """Write a universe_admit job to the pending_jobs collection."""
+    job = {
+        "job_type": "universe_admit",
+        "status": "pending",
+        "submitted_at": firestore.SERVER_TIMESTAMP,
+        "ticker": ticker.strip().upper(),
+        "company_name": company_name,
+        "market_cap_gbp": market_cap_gbp,
+        "listing_exchange": listing_exchange,
+        "not_of_interest": not_of_interest,
+        "source_discovery_id": source_discovery_id,
+    }
+    db.collection("pending_jobs").add(job)
+
+
+# ── Job helpers ────────────────────────────────────────────────────────────────
 
 def get_pending_jobs(db, limit=20):
     """Return recent pending_jobs documents, newest first."""
@@ -448,8 +474,9 @@ def get_pending_jobs(db, limit=20):
 
 
 def submit_job(db, row_dict, body):
-    """Write a job document to the pending_jobs collection."""
+    """Write an lseg_ingest job document to the pending_jobs collection."""
     job = {
+        "job_type": "lseg_ingest",
         "status": "pending",
         "submitted_at": firestore.SERVER_TIMESTAMP,
         "processed_at": None,
@@ -472,7 +499,8 @@ def submit_job(db, row_dict, body):
 # deployment constraint). Both copies must be kept in sync.
 
 
-def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types, company_keywords):
+def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types,
+                      company_keywords, not_of_interest_tickers):
     """
     Parse LSEG Excel export bytes and apply pre-filters.
 
@@ -483,6 +511,7 @@ def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types, company_keyw
       1. Source filter     — only RNS rows proceed
       2. Universe filter   — non-universe rows route to discovery
       2.5. Name filter     — company_keywords matched against company name; matched rows suppressed
+      2.8. Muted filter    — not_of_interest tickers suppressed
       3. Type filter       — excluded_types (loaded from Firestore app_config) suppressed
     """
 
@@ -587,6 +616,11 @@ def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types, company_keyw
         )
         if trust_match:
             suppressed.append((row_dict, f"Company name suggests investment trust/fund: '{trust_match}'"))
+            continue
+
+        # Filter 2.8: Muted ticker
+        if ticker.upper() in not_of_interest_tickers:
+            suppressed.append((row_dict, f"Ticker muted: '{ticker}'"))
             continue
 
         # Filter 3: Announcement type
@@ -726,10 +760,12 @@ st.markdown(f"""
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
 
-tab_signals, tab_discovery, tab_ingest = st.tabs([
+tab_signals, tab_discovery, tab_universe, tab_ingest, tab_config = st.tabs([
     f"Signals  [{len(signals)}]",
-    f"Discovery Queue  [{len(discoveries)}]",
+    f"Discovery  [{len(discoveries)}]",
+    "Universe",
     "Ingest",
+    "Config",
 ])
 
 # ── Signals tab ────────────────────────────────────────────────────────────────
@@ -738,7 +774,6 @@ with tab_signals:
     if not signals:
         st.markdown('<div class="empty-state">NO SIGNALS · Pipeline has not surfaced any results yet</div>', unsafe_allow_html=True)
     else:
-        # Sort: action-yes first, then monitor, then no
         def signal_sort_key(item):
             val = get_field(item[1].get("llm_analysis", ""), "RECOMMENDED_ACTION").lower()
             return {"yes": 0, "monitor": 1}.get(val, 2)
@@ -816,24 +851,197 @@ with tab_discovery:
                         for k, v in parsed
                     )
                     st.markdown(f'<div class="analysis-block">{formatted}</div>', unsafe_allow_html=True)
+
+                with st.expander("Admit to Universe"):
+                    admit_ticker = st.text_input(
+                        "Ticker", value=result.get("ticker", ""),
+                        key=f"disc_admit_ticker_{doc_id}"
+                    )
+                    admit_name = st.text_input(
+                        "Company Name", value=result.get("company_name", ""),
+                        key=f"disc_admit_name_{doc_id}"
+                    )
+                    admit_exchange = st.selectbox(
+                        "Exchange", ["AIM", "LSE Main"],
+                        key=f"disc_admit_exchange_{doc_id}"
+                    )
+                    admit_mcap = st.number_input(
+                        "Market Cap (£M)", min_value=0.0, max_value=1000.0,
+                        value=0.0, key=f"disc_admit_mcap_{doc_id}"
+                    )
+                    if st.button("Submit for admission", key=f"disc_admit_submit_{doc_id}"):
+                        exch_code = "AIM" if admit_exchange == "AIM" else "LSE_MAIN"
+                        mcap_gbp = admit_mcap * 1_000_000 if admit_mcap > 0 else None
+                        submit_universe_admit_job(
+                            db, admit_ticker, admit_name, mcap_gbp, exch_code,
+                            not_of_interest=False, source_discovery_id=doc_id
+                        )
+                        st.success("Admission job submitted — CH lookup running on VM.")
+
             with col2:
                 if st.button("Dismiss", key=f"dismiss_disc_{doc_id}"):
                     dismiss_document(db, "discovery_results", doc_id)
                     st.rerun()
 
+# ── Universe tab ───────────────────────────────────────────────────────────────
+
+with tab_universe:
+    st.markdown("""
+**Monitored Universe** — LSE-listed small-cap companies actively monitored for investment signals.
+
+**Inclusion criteria:**
+- Listed on AIM or FTSE Main Market
+- Market capitalisation ≤ £1B at time of inclusion
+- Active operating company (trusts, funds, SPACs excluded)
+
+**Companies House matching:**
+- Confidence 1.00 = exact name match · 0.85–0.99 = fuzzy match (acceptable) · No match = offshore-incorporated or unmatched
+""")
+
+    # Stats bar
+    try:
+        stats = get_universe_stats(db)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Total", stats["total"])
+        c2.metric("AIM", stats["aim"])
+        c3.metric("FTSE Main", stats["ftse"])
+        c4.metric("CH Matched", stats["ch_matched"])
+        c5.metric("Muted", stats["muted"])
+    except Exception as e:
+        st.caption(f"Could not load universe stats: {e}")
+
+    st.markdown("---")
+
+    # Search controls
+    col_search, col_exchange, col_show = st.columns([3, 1, 1])
+    query = col_search.text_input("Search ticker or company name", placeholder="e.g. GMR or Phoenix", key="universe_search")
+    exchange_filter = col_exchange.selectbox("Exchange", ["All", "AIM", "LSE Main"], key="universe_exchange")
+    show_muted = col_show.checkbox("Show muted", value=False, key="universe_show_muted")
+
+    # Page size — reset page on any filter change
+    page_size = st.selectbox("Rows per page", [25, 50, 100], key="universe_page_size")
+
+    # Load and filter companies
+    try:
+        all_companies = get_all_universe_companies(db)
+    except Exception as e:
+        all_companies = []
+        st.caption(f"Could not load universe: {e}")
+
+    filtered = all_companies
+    if not show_muted:
+        filtered = [c for c in filtered if not c.get("not_of_interest", False)]
+    if exchange_filter == "AIM":
+        filtered = [c for c in filtered if c.get("listing_exchange") == "AIM"]
+    elif exchange_filter == "LSE Main":
+        filtered = [c for c in filtered if c.get("listing_exchange") == "LSE_MAIN"]
+    if query.strip():
+        q = query.strip().lower()
+        filtered = [
+            c for c in filtered
+            if q in c.get("ticker_lse", "").lower()
+            or q in c.get("company_name", "").lower()
+        ]
+
+    # Pagination state — reset to page 0 on filter/size change
+    filter_key = (query, exchange_filter, show_muted, page_size)
+    if st.session_state.get("universe_filter_key") != filter_key:
+        st.session_state["universe_filter_key"] = filter_key
+        st.session_state["universe_page"] = 0
+
+    total_filtered = len(filtered)
+    total_pages = max(1, (total_filtered + page_size - 1) // page_size)
+    current_page = st.session_state.get("universe_page", 0)
+    current_page = min(current_page, total_pages - 1)
+
+    start = current_page * page_size
+    page_companies = filtered[start: start + page_size]
+
+    st.caption(f"{total_filtered} companies · page {current_page + 1} of {total_pages}")
+
+    # Pagination controls (top)
+    pg_prev, pg_next = st.columns([1, 1])
+    if pg_prev.button("← Prev", disabled=(current_page == 0), key="universe_prev"):
+        st.session_state["universe_page"] = current_page - 1
+        st.rerun()
+    if pg_next.button("Next →", disabled=(current_page >= total_pages - 1), key="universe_next"):
+        st.session_state["universe_page"] = current_page + 1
+        st.rerun()
+
+    if page_companies:
+        import pandas as pd
+
+        def _ch_conf_label(c):
+            conf = c.get("companies_house_confidence")
+            if conf is None:
+                return "—"
+            if conf >= 1.0:
+                return "Exact"
+            return f"{conf:.2f}"
+
+        df_universe = pd.DataFrame([{
+            "Ticker": c.get("ticker_lse", ""),
+            "Company": c.get("company_name", ""),
+            "Exchange": c.get("listing_exchange", ""),
+            "Market Cap (£M)": (
+                f"{c['market_cap_gbp'] / 1_000_000:.0f}"
+                if c.get("market_cap_gbp") else "—"
+            ),
+            "CH Confidence": _ch_conf_label(c),
+            "Muted": "●" if c.get("not_of_interest", False) else "",
+            "Added": c.get("universe_added_date", "")[:10] if c.get("universe_added_date") else "—",
+        } for c in page_companies])
+
+        st.dataframe(df_universe, hide_index=True, width="stretch")
+
+        # Mute / Unmute buttons below table — one per company on current page
+        st.markdown(
+            '<div class="terminal-header" style="margin-top:0.8rem;margin-bottom:0.5rem;">Actions</div>',
+            unsafe_allow_html=True,
+        )
+        for idx, c in enumerate(page_companies):
+            ticker = c.get("ticker_lse", "")
+            is_muted = c.get("not_of_interest", False)
+            label = "Unmute" if is_muted else "Mute"
+            btn_cols = st.columns([2, 2, 6])
+            btn_cols[0].caption(f"**{ticker}**")
+            btn_cols[1].caption(c.get("company_name", "")[:40])
+            if btn_cols[2].button(label, key=f"universe_mute_{ticker}_{idx}"):
+                mark_not_of_interest(db, ticker, not is_muted)
+                st.rerun()
+    else:
+        st.markdown('<div class="empty-state">NO COMPANIES MATCH FILTER</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # Manual add form
+    with st.expander("Add company manually"):
+        ma_col1, ma_col2 = st.columns([2, 1])
+        ma_ticker = ma_col1.text_input("Ticker (LSE)", placeholder="e.g. ACME", key="manual_add_ticker")
+        ma_exchange = ma_col2.selectbox("Exchange", ["AIM", "LSE Main"], key="manual_add_exchange")
+        ma_name = st.text_input("Company Name", placeholder="e.g. Acme Industries PLC", key="manual_add_name")
+        ma_mcap = st.number_input("Market Cap (£M, optional)", min_value=0.0, max_value=1000.0, value=0.0, key="manual_add_mcap")
+        if st.button("Add to Universe", key="manual_add_submit"):
+            if ma_ticker.strip() and ma_name.strip():
+                exch_code = "AIM" if ma_exchange == "AIM" else "LSE_MAIN"
+                mcap_gbp = ma_mcap * 1_000_000 if ma_mcap > 0 else None
+                submit_universe_admit_job(db, ma_ticker, ma_name, mcap_gbp, exch_code)
+                st.success("Submitted — CH lookup running on VM. Results appear in ~30 seconds.")
+            else:
+                st.warning("Ticker and Company Name are required.")
+
 # ── Ingest tab ─────────────────────────────────────────────────────────────────
 
 with tab_ingest:
 
-    # ── Section 1: Upload and Pre-filter ──────────────────────────────────────
+    # ── Step 1: Upload ─────────────────────────────────────────────────────────
 
     st.markdown(
-        '<div class="terminal-header" style="margin-bottom:0.8rem;">Step 1 — Upload LSEG Export</div>',
+        '<div class="terminal-header" style="margin-bottom:0.4rem;">Step 1 — Upload LSEG Export</div>',
         unsafe_allow_html=True,
     )
     st.caption(
-        "Export from LSEG: Market News → filter Source=RNS, Market=AIM/Small Cap → Export to Excel. "
-        "Upload the .xlsx file here."
+        "Export from LSEG: Market News → filter Source=RNS, Market=AIM/Small Cap → Export to Excel."
     )
 
     uploaded_file = st.file_uploader(
@@ -843,14 +1051,22 @@ with tab_ingest:
     )
 
     if uploaded_file is not None:
-        # Re-parse when the file changes OR when the exclusion list or company keywords have changed.
         excluded_types = get_exclusion_list(db)
         company_keywords = get_company_keywords(db)
-        ingest_cache_key = (uploaded_file.name, tuple(excluded_types), tuple(company_keywords))
+        not_of_interest_tickers = get_not_of_interest_tickers(db)
+        ingest_cache_key = (
+            uploaded_file.name,
+            tuple(excluded_types),
+            tuple(company_keywords),
+            tuple(sorted(not_of_interest_tickers)),
+        )
         if st.session_state.get("ingest_cache_key") != ingest_cache_key:
             universe_tickers = get_universe_tickers(db)
             file_bytes = uploaded_file.read()
-            st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers, excluded_types, company_keywords)
+            st.session_state["ingest_result"] = _parse_lseg_excel(
+                file_bytes, universe_tickers, excluded_types,
+                company_keywords, not_of_interest_tickers
+            )
             st.session_state["ingest_cache_key"] = ingest_cache_key
             st.session_state.pop("ingest_submitted", None)
 
@@ -859,15 +1075,19 @@ with tab_ingest:
         passed = result["passed"]
         disc = result["discovery"]
         supp = result["suppressed"]
-        # Summary
+
+        # Filter summary metrics
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Total rows", result["total_rows"])
         c2.metric("Skipped (non-RNS)", result["skipped_source"])
         c3.metric("Passed filters", len(passed))
         c4.metric("Discovery candidates", len(disc))
-        c5.metric("Suppressed (type)", len(supp))
+        c5.metric("Suppressed", len(supp))
 
-        # Passed rows table
+        st.markdown("---")
+
+        # ── Passed rows table ──────────────────────────────────────────────────
+
         if passed:
             import pandas as pd
 
@@ -890,26 +1110,32 @@ with tab_ingest:
                 hide_index=True,
                 width="stretch",
             )
+
+            # Mute ticker affordance — one button per passed row
+            st.markdown(
+                '<div class="terminal-header" style="margin-top:0.5rem;margin-bottom:0.3rem;">Mute a ticker</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("Muting removes this ticker from future ingest results permanently.")
+            for idx, row_dict in enumerate(list(passed)):
+                mute_cols = st.columns([2, 2, 2, 4])
+                mute_cols[0].caption(f"**{row_dict['ticker']}**")
+                mute_cols[1].caption(row_dict["company_name"][:30])
+                if mute_cols[2].button("Mute", key=f"mute_passed_{idx}_{row_dict['ticker']}"):
+                    mark_not_of_interest(db, row_dict["ticker"], True)
+                    # Remove from passed, move to suppressed in session state
+                    st.session_state["ingest_result"]["passed"].pop(idx)
+                    st.session_state["ingest_result"]["suppressed"].append(
+                        (row_dict, f"Ticker muted: '{row_dict['ticker']}'")
+                    )
+                    st.rerun()
         else:
             st.markdown(
                 '<div class="empty-state">NO ROWS PASSED FILTERS</div>',
                 unsafe_allow_html=True,
             )
 
-        # Suppressed rows (collapsed detail)
-        if supp:
-            with st.expander(f"Suppressed rows ({len(supp)})"):
-                for row_dict, reason in supp:
-                    st.caption(f"[{row_dict['ticker']}] {row_dict['announcement_type']} — {reason}")
-
-        # Discovery candidates (collapsed detail)
-        if disc:
-            with st.expander(f"Discovery candidates ({len(disc)}) — not in universe"):
-                for row_dict in disc:
-                    url_part = f"  [{row_dict['source_url']}]({row_dict['source_url']})" if row_dict["source_url"] else ""
-                    st.caption(f"[{row_dict['ticker']}] {row_dict['company_name']} — {row_dict['announcement_type']}{url_part}")
-
-        # ── Section 2: Submit for Analysis ────────────────────────────────────
+        # ── Step 2: Submit for Analysis ────────────────────────────────────────
 
         if passed:
             st.markdown("---")
@@ -954,7 +1180,86 @@ with tab_ingest:
                         st.session_state["ingest_submitted"].add(idx)
                         st.rerun()
 
-    # ── Section 3: Job Status ──────────────────────────────────────────────────
+        st.markdown("---")
+
+        # ── Discovery candidates ───────────────────────────────────────────────
+
+        if disc:
+            st.markdown(
+                f'<div class="terminal-header" style="margin-bottom:0.8rem;">Discovery Candidates ({len(disc)}) — not in universe</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("These companies are not in the monitored universe. Choose an action for each.")
+
+            if "ingest_disc_actions" not in st.session_state:
+                st.session_state["ingest_disc_actions"] = {}
+
+            disc_to_remove = []
+            for disc_idx, row_dict in enumerate(list(disc)):
+                disc_key = f"{disc_idx}_{row_dict['ticker']}"
+                action_state = st.session_state["ingest_disc_actions"].get(disc_key)
+
+                with st.expander(f"[{row_dict['ticker']}] {row_dict['company_name']} — {row_dict['announcement_type']}"):
+                    if row_dict["source_url"]:
+                        st.markdown(f"[Open on LSEG ↗]({row_dict['source_url']})")
+
+                    if action_state:
+                        st.success(action_state)
+                    else:
+                        btn_admit, btn_promote, btn_reject = st.columns(3)
+
+                        admit_clicked = btn_admit.button("Admit to Universe", key=f"disc_admit_{disc_key}")
+                        promote_clicked = btn_promote.button("Promote to Passed", key=f"disc_promote_{disc_key}")
+                        reject_clicked = btn_reject.button("Reject (add muted)", key=f"disc_reject_{disc_key}")
+
+                        if admit_clicked:
+                            st.session_state[f"disc_show_admit_{disc_key}"] = True
+                        if promote_clicked:
+                            st.session_state["ingest_result"]["passed"].append(row_dict)
+                            st.session_state["ingest_result"]["discovery"].pop(disc_idx)
+                            st.session_state["ingest_disc_actions"][disc_key] = "Promoted to Passed — see Step 2 above."
+                            st.rerun()
+                        if reject_clicked:
+                            st.session_state[f"disc_show_reject_{disc_key}"] = True
+
+                        if st.session_state.get(f"disc_show_admit_{disc_key}"):
+                            st.markdown("**Admit to Universe**")
+                            a_ticker = st.text_input("Ticker", value=row_dict.get("ticker", ""), key=f"da_ticker_{disc_key}")
+                            a_name = st.text_input("Company Name", value=row_dict.get("company_name", ""), key=f"da_name_{disc_key}")
+                            a_exchange = st.selectbox("Exchange", ["AIM", "LSE Main"], key=f"da_exchange_{disc_key}")
+                            a_mcap = st.number_input("Market Cap (£M, optional)", 0.0, 1000.0, 0.0, key=f"da_mcap_{disc_key}")
+                            if st.button("Submit admission", key=f"da_submit_{disc_key}"):
+                                exch_code = "AIM" if a_exchange == "AIM" else "LSE_MAIN"
+                                mcap_gbp = a_mcap * 1_000_000 if a_mcap > 0 else None
+                                submit_universe_admit_job(db, a_ticker, a_name, mcap_gbp, exch_code, not_of_interest=False)
+                                st.session_state["ingest_disc_actions"][disc_key] = f"Admission submitted for {a_ticker}."
+                                st.session_state.pop(f"disc_show_admit_{disc_key}", None)
+                                st.rerun()
+
+                        if st.session_state.get(f"disc_show_reject_{disc_key}"):
+                            st.markdown("**Reject — add to universe as muted**")
+                            r_exchange = st.selectbox("Exchange (required to set tier)", ["AIM", "LSE Main"], key=f"dr_exchange_{disc_key}")
+                            if st.button("Confirm reject", key=f"dr_submit_{disc_key}"):
+                                exch_code = "AIM" if r_exchange == "AIM" else "LSE_MAIN"
+                                ticker_up = row_dict.get("ticker", "").upper()
+                                submit_universe_admit_job(
+                                    db, ticker_up, row_dict.get("company_name", ""),
+                                    None, exch_code, not_of_interest=True
+                                )
+                                st.session_state["ingest_disc_actions"][disc_key] = f"Rejected — {ticker_up} added as muted."
+                                st.session_state.pop(f"disc_show_reject_{disc_key}", None)
+                                st.rerun()
+
+        st.markdown("---")
+
+        # ── Suppressed rows (last, collapsed) ─────────────────────────────────
+
+        if supp:
+            with st.expander(f"Suppressed rows ({len(supp)})"):
+                for row_dict, reason in supp:
+                    st.caption(f"[{row_dict['ticker']}] {row_dict['announcement_type']} — {reason}")
+
+    # ── Step 3: Job Status ─────────────────────────────────────────────────────
 
     st.markdown("---")
     hdr_col, refresh_col = st.columns([10, 1])
@@ -985,7 +1290,8 @@ with tab_ingest:
         for job_id, job in jobs:
             status = job.get("status", "—")
             ticker = job.get("ticker", "—")
-            headline = job.get("headline", "—")
+            job_type = job.get("job_type", "lseg_ingest")
+            headline = job.get("headline") or f"[{job_type}] {job.get('company_name', '—')}"
             colour = status_colours.get(status, "#3d5166")
             error = job.get("error")
 
@@ -1001,53 +1307,14 @@ with tab_ingest:
                 unsafe_allow_html=True,
             )
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
+# ── Config tab ─────────────────────────────────────────────────────────────────
 
-with st.sidebar:
+with tab_config:
 
-    # ── Universe Lookup ────────────────────────────────────────────────────────
-
-    st.markdown(
-        '<div class="terminal-header" style="margin-bottom:0.6rem;">Universe Lookup</div>',
-        unsafe_allow_html=True,
-    )
-
-    lookup_input = st.text_input(
-        "Ticker",
-        key="universe_lookup_input",
-        placeholder="e.g. GMR",
-        label_visibility="collapsed",
-    )
-
-    if st.button("Look up", key="universe_lookup_btn") and lookup_input.strip():
-        ticker_q = lookup_input.strip().upper()
-        company_data = get_universe_company(db, ticker_q)
-
-        if company_data:
-            st.success(f"**{ticker_q}** is in the universe")
-            ch_conf = company_data.get("companies_house_confidence")
-            ch_num = company_data.get("companies_house_number")
-            if ch_conf is not None:
-                st.caption(f"CH confidence: {ch_conf:.2f}  |  CH number: {ch_num or '—'}")
-            try:
-                sig_count, latest = get_ticker_signal_count(db, ticker_q)
-                st.caption(f"Signals recorded: {sig_count}")
-                if latest:
-                    ts = format_timestamp(latest.get("analysed_at", ""))
-                    headline = latest.get("headline", "")
-                    st.caption(f"Most recent: {ts}")
-                    st.caption(headline[:100] + "…" if len(headline) > 100 else headline)
-            except Exception:
-                st.caption("Signal count unavailable.")
-        else:
-            st.warning(f"**{ticker_q}** is not in the universe")
-
-    st.markdown("---")
-
-    # ── Filtration Rules ───────────────────────────────────────────────────────
+    # ── Announcement Type Exclusions ───────────────────────────────────────────
 
     st.markdown(
-        '<div class="terminal-header" style="margin-bottom:0.6rem;">Filtration Rules</div>',
+        '<div class="terminal-header" style="margin-bottom:0.6rem;">Announcement Type Exclusions</div>',
         unsafe_allow_html=True,
     )
     st.caption("Announcement types suppressed before LLM analysis. Match is case-insensitive substring.")
@@ -1077,7 +1344,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ── Company Name Keywords ───────────────────────────────────────────────────
+    # ── Company Name Keywords ──────────────────────────────────────────────────
 
     st.markdown(
         '<div class="terminal-header" style="margin-bottom:0.6rem;">Company Name Keywords</div>',

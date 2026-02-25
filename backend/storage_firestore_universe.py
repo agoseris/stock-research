@@ -79,6 +79,7 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             "fifty_two_week_low": company.fifty_two_week_low,
             "companies_house_number": company.companies_house_number,
             "companies_house_confidence": company.companies_house_confidence,
+            "not_of_interest": company.not_of_interest,
         }
 
     def _dict_to_company(self, data: dict) -> UniverseCompany:
@@ -120,6 +121,7 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             fifty_two_week_low=data.get("fifty_two_week_low"),
             companies_house_number=data.get("companies_house_number"),
             companies_house_confidence=data.get("companies_house_confidence"),
+            not_of_interest=data.get("not_of_interest", False),
         )
 
     def _log_to_dict(self, log: RefreshLog) -> dict:
@@ -246,6 +248,15 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
         except Exception as e:
             print(f"  [FirestoreUniverse] get_company({ticker_lse}) failed: {e}")
             return None
+
+    def save_company(self, company: UniverseCompany) -> None:
+        """Upsert a single company document without affecting other universe documents."""
+        try:
+            self.db.collection(self.UNIVERSE_COLLECTION).document(
+                company.ticker_lse
+            ).set(self._company_to_dict(company))
+        except Exception as e:
+            print(f"  [FirestoreUniverse] save_company({company.ticker_lse}) failed: {e}")
 
     # --- Refresh log ---
 
