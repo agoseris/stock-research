@@ -26,8 +26,13 @@
 | Python venv | `/home/danjmorris/stock-research/backend/venv` |
 | Credentials file | `backend/gcp-credentials.json` (never committed) |
 | Environment file | `backend/.env` (never committed) |
-| Pipeline log | `~/pipeline.log` |
+| Pipeline log | `/home/danjmorris/pipeline.log` |
 | Cron schedule | 07:00 UTC daily |
+
+Exact crontab entry:
+```
+0 7 * * * cd /home/danjmorris/stock-research && /home/danjmorris/stock-research/backend/venv/bin/python backend/pipeline.py >> /home/danjmorris/pipeline.log 2>&1
+```
 
 ### SSH Access
 | Item | Value |

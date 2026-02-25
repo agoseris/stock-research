@@ -183,11 +183,11 @@ sudo systemctl status job_runner
 journalctl -u job_runner -f
 
 # Check cron log
-tail -50 ~/pipeline.log
+tail -50 /home/danjmorris/pipeline.log
 
 # Check cron schedule
 crontab -l
-# Should show: 0 7 * * * cd /home/danjmorris/stock-research && .../python backend/pipeline.py >> ~/pipeline.log 2>&1
+# 0 7 * * * cd /home/danjmorris/stock-research && /home/danjmorris/stock-research/backend/venv/bin/python backend/pipeline.py >> /home/danjmorris/pipeline.log 2>&1
 ```
 
 ---
