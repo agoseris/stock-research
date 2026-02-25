@@ -70,11 +70,17 @@ gcloud compute ssh danjmorris@stock-research-vm --project stock-research-poc --z
 GitHub is always the intermediary. A `deploy` alias in WSL `~/.bashrc` handles
 staging, commit prompt, push, and VM pull in one step.
 
-**VM deploy script:** `~/deploy.sh` — pulls from `master` and optionally restarts
-services. After code changes affecting the job runner, restart it manually:
+**VM deploy script:** `~/deploy.sh` — pulls from `master` and restarts the job runner.
+Correct contents:
 ```bash
+#!/bin/bash
+cd ~/stock-research
+git pull origin master
 sudo systemctl restart job_runner
+echo "Deployment complete."
 ```
+
+> **Note:** service name is `job_runner` (underscore). `job-runner` (hyphen) will fail.
 
 ---
 
