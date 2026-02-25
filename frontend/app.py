@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.6"
+VERSION = "2.7"
 
 
 
@@ -1070,6 +1070,10 @@ with tab_ingest:
     )
 
     if uploaded_file is not None:
+        # Always flush config caches before computing the parse cache key so that
+        # edits made directly in Firestore (bypassing the Config tab) are picked up.
+        get_exclusion_list.clear()
+        get_company_keywords.clear()
         excluded_types = get_exclusion_list(db)
         company_keywords = get_company_keywords(db)
         not_of_interest_tickers = get_not_of_interest_tickers(db)
