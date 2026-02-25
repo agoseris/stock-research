@@ -87,6 +87,22 @@ def load_exclusion_list(db) -> list:
     return list(EXCLUDED_ANNOUNCEMENT_TYPES)
 
 
+def load_company_keywords(db) -> list:
+    """
+    Load the company name keyword filter from Firestore app_config/lseg_filters.
+    Falls back to TRUST_COMPANY_KEYWORDS if the field does not exist or Firestore is unavailable.
+    """
+    try:
+        doc = db.collection("app_config").document("lseg_filters").get()
+        if doc.exists:
+            data = doc.to_dict()
+            if "excluded_company_keywords" in data:
+                return data["excluded_company_keywords"]
+    except Exception as e:
+        print(f"load_company_keywords: Firestore read failed ({e}) — using default list.")
+    return list(TRUST_COMPANY_KEYWORDS)
+
+
 # ---------------------------------------------------------------------------
 # Intermediate row representation
 # ---------------------------------------------------------------------------
@@ -175,10 +191,12 @@ class LSEGExcelProvider(AnnouncementProviderBase):
         file_path: str,
         universe_storage: Optional[UniverseStorageProviderBase] = None,
         excluded_types: Optional[List[str]] = None,
+        trust_keywords: Optional[List[str]] = None,
     ):
         self._file_path = file_path
         self._universe_storage = universe_storage
         self._excluded_types: List[str] = excluded_types if excluded_types is not None else list(EXCLUDED_ANNOUNCEMENT_TYPES)
+        self._trust_keywords: List[str] = trust_keywords if trust_keywords is not None else list(TRUST_COMPANY_KEYWORDS)
         self._universe_tickers: Optional[Set[str]] = None  # lazy-loaded on first parse
 
     # ------------------------------------------------------------------
@@ -277,11 +295,10 @@ class LSEGExcelProvider(AnnouncementProviderBase):
             return None
         return str(val).strip()
 
-    @staticmethod
-    def _matches_trust_keyword(company_name: str) -> Optional[str]:
+    def _matches_trust_keyword(self, company_name: str) -> Optional[str]:
         """Return the matching keyword if company_name suggests an investment trust or fund, else None."""
         name_lower = company_name.lower()
-        for kw in TRUST_COMPANY_KEYWORDS:
+        for kw in self._trust_keywords:
             if kw in name_lower:
                 return kw
         return None
@@ -443,17 +460,25 @@ if __name__ == "__main__":
 
     universe_storage = None
     excluded_types = None
+    trust_keywords = None
     try:
         from google.cloud import firestore as _firestore
         from storage_firestore_universe import FirestoreUniverseProvider
         _db = _firestore.Client()
         universe_storage = FirestoreUniverseProvider()
         excluded_types = load_exclusion_list(_db)
-        print(f"Exclusion list loaded from Firestore ({len(excluded_types)} entries).\n")
+        trust_keywords = load_company_keywords(_db)
+        print(f"Exclusion list loaded from Firestore ({len(excluded_types)} entries).")
+        print(f"Company keywords loaded from Firestore ({len(trust_keywords)} entries).\n")
     except Exception as e:
         print(f"Firestore unavailable ({e}) — running without universe filter, using default exclusion list.\n")
 
-    provider = LSEGExcelProvider(file_path, universe_storage=universe_storage, excluded_types=excluded_types)
+    provider = LSEGExcelProvider(
+        file_path,
+        universe_storage=universe_storage,
+        excluded_types=excluded_types,
+        trust_keywords=trust_keywords,
+    )
 
     print(f"Parsing: {file_path}\n")
     result = provider.parse_excel()

@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.1"
+VERSION = "2.2"
 
 
 
@@ -360,24 +360,55 @@ _DEFAULT_EXCLUDED_TYPES = [
 def get_exclusion_list(_db):
     """
     Load the announcement type exclusion list from Firestore app_config/lseg_filters.
-    Seeds the document from _DEFAULT_EXCLUDED_TYPES on first call if it does not exist.
+    Seeds the field from _DEFAULT_EXCLUDED_TYPES if it does not exist.
     Cached for 60 seconds so UI edits propagate quickly.
     """
     ref = _db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC)
     doc = ref.get()
     if doc.exists:
-        return doc.to_dict().get("excluded_announcement_types", [])
-    # First run — seed Firestore from the default list
-    ref.set({"excluded_announcement_types": _DEFAULT_EXCLUDED_TYPES})
+        data = doc.to_dict()
+        if "excluded_announcement_types" in data:
+            return data["excluded_announcement_types"]
+    # Field missing or document doesn't exist — seed it
+    ref.set({"excluded_announcement_types": _DEFAULT_EXCLUDED_TYPES}, merge=True)
     return list(_DEFAULT_EXCLUDED_TYPES)
 
 
 def save_exclusion_list(db, excluded_types):
     """Persist the exclusion list to Firestore and invalidate the cache."""
     db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC).set(
-        {"excluded_announcement_types": excluded_types}
+        {"excluded_announcement_types": excluded_types}, merge=True
     )
     get_exclusion_list.clear()
+
+
+_DEFAULT_COMPANY_KEYWORDS = ["trust", "trst", "income", "growth", "grwth", "fund"]
+
+
+@st.cache_data(ttl=60)
+def get_company_keywords(_db):
+    """
+    Load the company name keyword filter from Firestore app_config/lseg_filters.
+    Seeds the field from _DEFAULT_COMPANY_KEYWORDS if it does not exist.
+    Cached for 60 seconds so UI edits propagate quickly.
+    """
+    ref = _db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC)
+    doc = ref.get()
+    if doc.exists:
+        data = doc.to_dict()
+        if "excluded_company_keywords" in data:
+            return data["excluded_company_keywords"]
+    # Field missing or document doesn't exist — seed it
+    ref.set({"excluded_company_keywords": _DEFAULT_COMPANY_KEYWORDS}, merge=True)
+    return list(_DEFAULT_COMPANY_KEYWORDS)
+
+
+def save_company_keywords(db, keywords):
+    """Persist the company keyword list to Firestore and invalidate the cache."""
+    db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC).set(
+        {"excluded_company_keywords": keywords}, merge=True
+    )
+    get_company_keywords.clear()
 
 
 @st.cache_data(ttl=300)
@@ -440,11 +471,8 @@ def submit_job(db, row_dict, body):
 # frontend/app.py must not import from backend/ (Streamlit Community Cloud
 # deployment constraint). Both copies must be kept in sync.
 
-# Mirrors TRUST_COMPANY_KEYWORDS in lseg_excel_provider.py.
-_TRUST_COMPANY_KEYWORDS = ["trust", "trst", "income", "growth", "grwth", "fund"]
 
-
-def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types):
+def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types, company_keywords):
     """
     Parse LSEG Excel export bytes and apply pre-filters.
 
@@ -452,9 +480,10 @@ def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types):
     Each row is a plain dict (not a dataclass) suitable for Streamlit display.
 
     Filtering order:
-      1. Source filter   — only RNS rows proceed
-      2. Universe filter — non-universe rows route to discovery
-      3. Type filter     — excluded_types (loaded from Firestore app_config) suppressed
+      1. Source filter     — only RNS rows proceed
+      2. Universe filter   — non-universe rows route to discovery
+      2.5. Name filter     — company_keywords matched against company name; matched rows suppressed
+      3. Type filter       — excluded_types (loaded from Firestore app_config) suppressed
     """
 
     def _parse_dt(date_val, time_val):
@@ -553,7 +582,7 @@ def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types):
 
         # Filter 2.5: Trust / fund company name
         trust_match = next(
-            (kw for kw in _TRUST_COMPANY_KEYWORDS if kw in company.lower()),
+            (kw for kw in company_keywords if kw in company.lower()),
             None,
         )
         if trust_match:
@@ -814,13 +843,14 @@ with tab_ingest:
     )
 
     if uploaded_file is not None:
-        # Re-parse when the file changes OR when the exclusion list has changed.
+        # Re-parse when the file changes OR when the exclusion list or company keywords have changed.
         excluded_types = get_exclusion_list(db)
-        ingest_cache_key = (uploaded_file.name, tuple(excluded_types))
+        company_keywords = get_company_keywords(db)
+        ingest_cache_key = (uploaded_file.name, tuple(excluded_types), tuple(company_keywords))
         if st.session_state.get("ingest_cache_key") != ingest_cache_key:
             universe_tickers = get_universe_tickers(db)
             file_bytes = uploaded_file.read()
-            st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers, excluded_types)
+            st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers, excluded_types, company_keywords)
             st.session_state["ingest_cache_key"] = ingest_cache_key
             st.session_state.pop("ingest_submitted", None)
 
@@ -1043,4 +1073,37 @@ with st.sidebar:
         entry = new_type.strip()
         if entry not in current_excluded:
             save_exclusion_list(db, current_excluded + [entry])
+        st.rerun()
+
+    st.markdown("---")
+
+    # ── Company Name Keywords ───────────────────────────────────────────────────
+
+    st.markdown(
+        '<div class="terminal-header" style="margin-bottom:0.6rem;">Company Name Keywords</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Company names containing these substrings are suppressed (investment trusts / funds). Case-insensitive.")
+
+    current_keywords = get_company_keywords(db)
+
+    for kw in current_keywords:
+        col_label, col_btn = st.columns([5, 1])
+        col_label.caption(kw)
+        if col_btn.button("×", key=f"remove_kw_{kw}"):
+            updated = [k for k in current_keywords if k != kw]
+            save_company_keywords(db, updated)
+            st.rerun()
+
+    st.markdown("")
+    new_kw = st.text_input(
+        "Add keyword",
+        key="new_company_kw",
+        placeholder="e.g. reit",
+        label_visibility="collapsed",
+    )
+    if st.button("Add", key="add_company_kw_btn") and new_kw.strip():
+        kw = new_kw.strip().lower()
+        if kw not in current_keywords:
+            save_company_keywords(db, current_keywords + [kw])
         st.rerun()
