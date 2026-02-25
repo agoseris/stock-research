@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.3"
+VERSION = "1.4"
 
 # ---------------------------------------------------------------------------
 # Announcement type exclusion list — shared with backend/lseg_excel_provider.py
@@ -44,6 +44,8 @@ EXCLUDED_ANNOUNCEMENT_TYPES = [
     "Blocklisting Interim Review",
     "Publication of Prospectus",
     "Result of AGM",
+    "Director Declaration",
+    "Conversion of B Shares",
 ]
 
 

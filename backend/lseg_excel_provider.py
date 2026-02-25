@@ -54,6 +54,8 @@ EXCLUDED_ANNOUNCEMENT_TYPES = [
     "Blocklisting Interim Review",
     "Publication of Prospectus",
     "Result of AGM",
+    "Director Declaration",
+    "Conversion of B Shares",
 ]
 
 
