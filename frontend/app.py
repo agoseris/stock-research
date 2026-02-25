@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.3"
+VERSION = "2.4"
 
 
 
@@ -471,6 +471,16 @@ def get_pending_jobs(db, limit=20):
         .stream()
     )
     return [(doc.id, doc.to_dict()) for doc in docs]
+
+
+@st.cache_data(ttl=60)
+def _get_processed_source_urls(_db) -> set:
+    """Return set of source_url values already in the announcements dedup store."""
+    try:
+        docs = _db.collection("announcements").select(["source_url"]).stream()
+        return {d.to_dict().get("source_url", "") for d in docs if d.to_dict().get("source_url")}
+    except Exception:
+        return set()
 
 
 def submit_job(db, row_dict, body):
@@ -1032,6 +1042,15 @@ with tab_universe:
 
 # ── Ingest tab ─────────────────────────────────────────────────────────────────
 
+# Outcome ordering and styling for unified table
+_OUTCOME_ORDER = {"passed": 0, "discovery": 1, "muted": 2, "suppressed": 3}
+_OUTCOME_STYLE = {
+    "passed":     ("PASSED",     "#27ae60"),
+    "discovery":  ("DISCOVERY",  "#f39c12"),
+    "muted":      ("MUTED",      "#7f8c8d"),
+    "suppressed": ("SUPPRESSED", "#2980b9"),
+}
+
 with tab_ingest:
 
     # ── Step 1: Upload ─────────────────────────────────────────────────────────
@@ -1068,204 +1087,255 @@ with tab_ingest:
                 company_keywords, not_of_interest_tickers
             )
             st.session_state["ingest_cache_key"] = ingest_cache_key
-            st.session_state.pop("ingest_submitted", None)
+            # Clear per-file session state on new upload
+            st.session_state["ingest_dismissed"] = set()
+            st.session_state["ingest_session_muted"] = set()
+            st.session_state.pop("ingest_subform_open", None)
+
+    # Initialise session state keys used by the unified table
+    st.session_state.setdefault("ingest_dismissed", set())
+    st.session_state.setdefault("ingest_session_muted", set())
 
     if "ingest_result" in st.session_state:
         result = st.session_state["ingest_result"]
-        passed = result["passed"]
-        disc = result["discovery"]
-        supp = result["suppressed"]
 
         # Filter summary metrics
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Total rows", result["total_rows"])
         c2.metric("Skipped (non-RNS)", result["skipped_source"])
-        c3.metric("Passed filters", len(passed))
-        c4.metric("Discovery candidates", len(disc))
-        c5.metric("Suppressed", len(supp))
+        c3.metric("Passed filters", len(result["passed"]))
+        c4.metric("Discovery candidates", len(result["discovery"]))
+        c5.metric("Suppressed", len(result["suppressed"]))
 
         st.markdown("---")
 
-        # ── Passed rows table ──────────────────────────────────────────────────
+        # ── Build unified row list ─────────────────────────────────────────────
+        # Assign stable _row_id before any sorting/filtering so dismiss keys
+        # remain consistent across reruns.
 
-        if passed:
-            import pandas as pd
+        all_rows = []
+        for idx, r in enumerate(result["passed"]):
+            all_rows.append({**r, "outcome": "passed", "reason": "", "_row_id": f"p_{idx}"})
+        for idx, r in enumerate(result["discovery"]):
+            all_rows.append({**r, "outcome": "discovery", "reason": "", "_row_id": f"d_{idx}"})
+        for idx, (r, reason) in enumerate(result["suppressed"]):
+            outcome = "muted" if reason.lower().startswith("ticker muted") else "suppressed"
+            all_rows.append({**r, "outcome": outcome, "reason": reason, "_row_id": f"s_{idx}"})
 
-            df = pd.DataFrame([{
-                "Ticker": r["ticker"],
-                "Company": r["company_name"],
-                "Type": r["announcement_type"],
-                "Date": r["published_at"].strftime("%d %b") if r["published_at"] else "—",
-                "Time": r["published_at"].strftime("%H:%M") if r["published_at"] else "—",
-                "Price (p)": r["price_pence"] if r["price_pence"] is not None else "—",
-                "Change": r["price_change_pct"] if r["price_change_pct"] else "—",
-                "URL": r["source_url"],
-            } for r in passed])
+        # Apply session-level mutes (ticker muted this session without re-parse)
+        session_muted = st.session_state["ingest_session_muted"]
+        for row in all_rows:
+            if row["ticker"].upper() in session_muted and row["outcome"] == "passed":
+                row["outcome"] = "muted"
 
-            st.dataframe(
-                df,
-                column_config={
-                    "URL": st.column_config.LinkColumn("URL", display_text="Open ↗"),
-                },
-                hide_index=True,
-                width="stretch",
-            )
+        # Remove dismissed rows
+        dismissed = st.session_state["ingest_dismissed"]
+        all_rows = [
+            r for r in all_rows
+            if (r.get("source_url") or r["_row_id"]) not in dismissed
+        ]
 
-            # Mute ticker affordance — one button per passed row
+        # ── Sort and filter controls ───────────────────────────────────────────
+
+        col_sort, col_filter = st.columns([2, 2])
+        sort_by = col_sort.selectbox(
+            "Sort by", ["Outcome", "Date", "Ticker", "Company"],
+            label_visibility="collapsed",
+            key="ingest_sort_by",
+        )
+        filter_by = col_filter.selectbox(
+            "Show", ["All", "Passed", "Discovery", "Muted", "Suppressed"],
+            label_visibility="collapsed",
+            key="ingest_filter_by",
+        )
+
+        sort_fns = {
+            "Outcome":  lambda r: (_OUTCOME_ORDER.get(r["outcome"], 9), str(r.get("published_at", ""))),
+            "Date":     lambda r: str(r.get("published_at", "")),
+            "Ticker":   lambda r: r.get("ticker", ""),
+            "Company":  lambda r: r.get("company_name", ""),
+        }
+        rows = sorted(all_rows, key=sort_fns[sort_by])
+        if filter_by != "All":
+            rows = [r for r in rows if r["outcome"] == filter_by.lower()]
+
+        # Fetch already-processed URLs for "✓ Analysed" indicator
+        processed_urls = _get_processed_source_urls(db)
+
+        # ── Column header row ──────────────────────────────────────────────────
+
+        if rows:
+            hdr = st.columns([1.2, 1, 2.5, 2, 1, 0.8, 1, 1, 0.6, 0.6, 0.6, 1.8])
+            for col, label in zip(hdr, [
+                "Outcome", "Ticker", "Company", "Type", "Date", "Time",
+                "Price(p)", "Chg%", "URL", "Dismiss", "Mute", "Action",
+            ]):
+                col.caption(f"**{label}**")
             st.markdown(
-                '<div class="terminal-header" style="margin-top:0.5rem;margin-bottom:0.3rem;">Mute a ticker</div>',
+                '<hr style="margin:0.2rem 0 0.5rem 0;border-color:#1a2535;"/>',
                 unsafe_allow_html=True,
             )
-            st.caption("Muting removes this ticker from future ingest results permanently.")
-            for idx, row_dict in enumerate(list(passed)):
-                mute_cols = st.columns([2, 2, 2, 4])
-                mute_cols[0].caption(f"**{row_dict['ticker']}**")
-                mute_cols[1].caption(row_dict["company_name"][:30])
-                if mute_cols[2].button("Mute", key=f"mute_passed_{idx}_{row_dict['ticker']}"):
-                    mark_not_of_interest(db, row_dict["ticker"], True)
-                    # Remove from passed, move to suppressed in session state
-                    st.session_state["ingest_result"]["passed"].pop(idx)
-                    st.session_state["ingest_result"]["suppressed"].append(
-                        (row_dict, f"Ticker muted: '{row_dict['ticker']}'")
-                    )
+
+        # ── Render rows ────────────────────────────────────────────────────────
+
+        for i, row in enumerate(rows):
+            row_uid = row.get("source_url") or row["_row_id"]
+            is_muted = row["outcome"] == "muted"
+            txt = st.caption if is_muted else st.text  # lighter style for muted
+
+            (c_badge, c_ticker, c_company, c_type, c_date, c_time,
+             c_price, c_chg, c_url, c_dismiss, c_mute, c_action) = st.columns(
+                [1.2, 1, 2.5, 2, 1, 0.8, 1, 1, 0.6, 0.6, 0.6, 1.8]
+            )
+
+            # Outcome badge
+            label, color = _OUTCOME_STYLE.get(row["outcome"], ("?", "#888"))
+            c_badge.markdown(
+                f'<span style="color:{color};font-size:0.65rem;'
+                f'font-family:\'IBM Plex Mono\',monospace;'
+                f'{"opacity:0.5;" if is_muted else ""}">● {label}</span>',
+                unsafe_allow_html=True,
+            )
+
+            # Data cells — use caption for muted rows (lighter rendering)
+            pub = row.get("published_at")
+            date_str = pub.strftime("%d %b") if pub else "—"
+            time_str = pub.strftime("%H:%M") if pub else "—"
+            price_str = str(row.get("price_pence") or "—")
+            chg_str = str(row.get("price_change_pct") or "—")
+
+            for col, val in [
+                (c_ticker,  row.get("ticker", "—")),
+                (c_company, row.get("company_name", "—")[:28]),
+                (c_type,    row.get("announcement_type", "—")[:24]),
+                (c_date,    date_str),
+                (c_time,    time_str),
+                (c_price,   price_str),
+                (c_chg,     chg_str),
+            ]:
+                col.caption(val) if is_muted else col.markdown(
+                    f'<span style="font-size:0.8rem;">{val}</span>',
+                    unsafe_allow_html=True,
+                )
+
+            # URL link
+            src_url = row.get("source_url", "")
+            if src_url:
+                c_url.markdown(f'<a href="{src_url}" target="_blank" style="font-size:0.75rem;">↗</a>', unsafe_allow_html=True)
+            else:
+                c_url.caption("—")
+
+            # Dismiss button (all rows)
+            if c_dismiss.button("✕", key=f"dismiss_{i}", help="Dismiss this row"):
+                st.session_state["ingest_dismissed"].add(row_uid)
+                st.rerun()
+
+            # Mute button (non-muted rows only)
+            if not is_muted:
+                if c_mute.button("Mute", key=f"mute_{i}", help="Mute this ticker permanently"):
+                    mark_not_of_interest(db, row["ticker"], True)
+                    st.session_state["ingest_session_muted"].add(row["ticker"].upper())
                     st.rerun()
-        else:
-            st.markdown(
-                '<div class="empty-state">NO ROWS PASSED FILTERS</div>',
-                unsafe_allow_html=True,
-            )
+            else:
+                c_mute.caption("—")
 
-        # ── Step 2: Submit for Analysis ────────────────────────────────────────
+            # Action column
+            subform_key = "ingest_subform_open"
 
-        if passed:
-            st.markdown("---")
-            st.markdown(
-                '<div class="terminal-header" style="margin-bottom:0.8rem;">Step 2 — Submit for Analysis</div>',
-                unsafe_allow_html=True,
-            )
-            st.caption(
-                "Open the announcement on LSEG, read it, paste the full body text below, then submit. "
-                "The VM will pick up the job and run LLM analysis. Results appear in the Signals tab."
-            )
-
-            if "ingest_submitted" not in st.session_state:
-                st.session_state["ingest_submitted"] = set()
-
-            for idx, row_dict in enumerate(passed):
-                label = f"[{row_dict['ticker']}]  {row_dict['company_name']} — {row_dict['announcement_type']}"
-
-                with st.expander(label):
-                    if row_dict["source_url"]:
-                        st.markdown(f"[Open on LSEG ↗]({row_dict['source_url']})")
-
-                    if idx in st.session_state["ingest_submitted"]:
-                        st.success(f"Submitted — [{row_dict['ticker']}] {row_dict['announcement_type']}")
-                        continue
-
-                    body_key = f"ingest_body_{idx}"
-                    body = st.text_area(
-                        "Paste announcement body",
-                        key=body_key,
-                        height=150,
-                        placeholder="Copy and paste the full announcement text from LSEG here...",
-                        label_visibility="collapsed",
-                    )
-
-                    if st.button(
-                        "Submit for analysis",
-                        key=f"ingest_submit_{idx}",
-                        disabled=not (body or "").strip(),
-                    ):
-                        submit_job(db, row_dict, body)
-                        st.session_state["ingest_submitted"].add(idx)
+            if row["outcome"] == "passed":
+                if src_url and src_url in processed_urls:
+                    c_action.caption("✓ Analysed")
+                else:
+                    row_key = f"body_{i}"
+                    if c_action.button("Submit ▾", key=f"open_body_{i}"):
+                        if st.session_state.get(subform_key) == row_key:
+                            st.session_state.pop(subform_key, None)
+                        else:
+                            st.session_state[subform_key] = row_key
                         st.rerun()
 
-        st.markdown("---")
+                    if st.session_state.get(subform_key) == row_key:
+                        with st.container():
+                            body = st.text_area(
+                                "Paste announcement body",
+                                key=row_key,
+                                height=150,
+                                placeholder="Copy and paste the full announcement text...",
+                                label_visibility="collapsed",
+                            )
+                            col_submit, col_cancel = st.columns([2, 1])
+                            if col_submit.button(
+                                "Submit for analysis",
+                                key=f"submit_{i}",
+                                disabled=not (body or "").strip(),
+                            ):
+                                submit_job(db, row, body)
+                                st.session_state.pop(subform_key, None)
+                                _get_processed_source_urls.clear()
+                                st.rerun()
+                            if col_cancel.button("Cancel", key=f"cancel_{i}"):
+                                st.session_state.pop(subform_key, None)
+                                st.rerun()
 
-        # ── Discovery candidates ───────────────────────────────────────────────
+            elif row["outcome"] == "discovery":
+                row_key_admit = f"admit_{i}"
+                col_a, col_b = c_action.columns(2)
 
-        if disc:
+                if col_a.button("+ Univ", key=f"admit_btn_{i}", help="Add to Universe"):
+                    if st.session_state.get(subform_key) == row_key_admit:
+                        st.session_state.pop(subform_key, None)
+                    else:
+                        st.session_state[subform_key] = row_key_admit
+                    st.rerun()
+
+                if col_b.button("→ Pass", key=f"promote_btn_{i}", help="Promote to Passed"):
+                    # Move row from discovery to passed in session state
+                    orig = row.copy()
+                    orig.pop("outcome", None)
+                    orig.pop("reason", None)
+                    try:
+                        st.session_state["ingest_result"]["discovery"].remove(orig)
+                    except (ValueError, AttributeError):
+                        pass
+                    st.session_state["ingest_result"]["passed"].append(orig)
+                    st.rerun()
+
+                if st.session_state.get(subform_key) == row_key_admit:
+                    with st.container():
+                        st.caption("**Admit to Universe**")
+                        a_ticker   = st.text_input("Ticker",       value=row.get("ticker", ""),       key=f"da_t_{i}")
+                        a_name     = st.text_input("Company Name", value=row.get("company_name", ""), key=f"da_n_{i}")
+                        a_exchange = st.selectbox("Exchange",      ["AIM", "LSE Main"],               key=f"da_e_{i}")
+                        a_mcap     = st.number_input("Market Cap (£M, optional)", 0.0, 1000.0, 0.0,  key=f"da_m_{i}")
+                        col_sub, col_can = st.columns([2, 1])
+                        if col_sub.button("Submit admission", key=f"da_submit_{i}"):
+                            exch_code = "AIM" if a_exchange == "AIM" else "LSE_MAIN"
+                            mcap_gbp = a_mcap * 1_000_000 if a_mcap > 0 else None
+                            submit_universe_admit_job(db, a_ticker, a_name, mcap_gbp, exch_code, not_of_interest=False)
+                            st.session_state.pop(subform_key, None)
+                            st.rerun()
+                        if col_can.button("Cancel", key=f"da_cancel_{i}"):
+                            st.session_state.pop(subform_key, None)
+                            st.rerun()
+
+            else:
+                # Muted or suppressed — show reason on hover via help
+                if row.get("reason"):
+                    c_action.caption(f"ℹ {row['reason'][:30]}")
+
+        if not rows:
             st.markdown(
-                f'<div class="terminal-header" style="margin-bottom:0.8rem;">Discovery Candidates ({len(disc)}) — not in universe</div>',
+                '<div class="empty-state">NO ROWS MATCH CURRENT FILTER</div>',
                 unsafe_allow_html=True,
             )
-            st.caption("These companies are not in the monitored universe. Choose an action for each.")
 
-            if "ingest_disc_actions" not in st.session_state:
-                st.session_state["ingest_disc_actions"] = {}
-
-            disc_to_remove = []
-            for disc_idx, row_dict in enumerate(list(disc)):
-                disc_key = f"{disc_idx}_{row_dict['ticker']}"
-                action_state = st.session_state["ingest_disc_actions"].get(disc_key)
-
-                with st.expander(f"[{row_dict['ticker']}] {row_dict['company_name']} — {row_dict['announcement_type']}"):
-                    if row_dict["source_url"]:
-                        st.markdown(f"[Open on LSEG ↗]({row_dict['source_url']})")
-
-                    if action_state:
-                        st.success(action_state)
-                    else:
-                        btn_admit, btn_promote, btn_reject = st.columns(3)
-
-                        admit_clicked = btn_admit.button("Admit to Universe", key=f"disc_admit_{disc_key}")
-                        promote_clicked = btn_promote.button("Promote to Passed", key=f"disc_promote_{disc_key}")
-                        reject_clicked = btn_reject.button("Reject (add muted)", key=f"disc_reject_{disc_key}")
-
-                        if admit_clicked:
-                            st.session_state[f"disc_show_admit_{disc_key}"] = True
-                        if promote_clicked:
-                            st.session_state["ingest_result"]["passed"].append(row_dict)
-                            st.session_state["ingest_result"]["discovery"].pop(disc_idx)
-                            st.session_state["ingest_disc_actions"][disc_key] = "Promoted to Passed — see Step 2 above."
-                            st.rerun()
-                        if reject_clicked:
-                            st.session_state[f"disc_show_reject_{disc_key}"] = True
-
-                        if st.session_state.get(f"disc_show_admit_{disc_key}"):
-                            st.markdown("**Admit to Universe**")
-                            a_ticker = st.text_input("Ticker", value=row_dict.get("ticker", ""), key=f"da_ticker_{disc_key}")
-                            a_name = st.text_input("Company Name", value=row_dict.get("company_name", ""), key=f"da_name_{disc_key}")
-                            a_exchange = st.selectbox("Exchange", ["AIM", "LSE Main"], key=f"da_exchange_{disc_key}")
-                            a_mcap = st.number_input("Market Cap (£M, optional)", 0.0, 1000.0, 0.0, key=f"da_mcap_{disc_key}")
-                            if st.button("Submit admission", key=f"da_submit_{disc_key}"):
-                                exch_code = "AIM" if a_exchange == "AIM" else "LSE_MAIN"
-                                mcap_gbp = a_mcap * 1_000_000 if a_mcap > 0 else None
-                                submit_universe_admit_job(db, a_ticker, a_name, mcap_gbp, exch_code, not_of_interest=False)
-                                st.session_state["ingest_disc_actions"][disc_key] = f"Admission submitted for {a_ticker}."
-                                st.session_state.pop(f"disc_show_admit_{disc_key}", None)
-                                st.rerun()
-
-                        if st.session_state.get(f"disc_show_reject_{disc_key}"):
-                            st.markdown("**Reject — add to universe as muted**")
-                            r_exchange = st.selectbox("Exchange (required to set tier)", ["AIM", "LSE Main"], key=f"dr_exchange_{disc_key}")
-                            if st.button("Confirm reject", key=f"dr_submit_{disc_key}"):
-                                exch_code = "AIM" if r_exchange == "AIM" else "LSE_MAIN"
-                                ticker_up = row_dict.get("ticker", "").upper()
-                                submit_universe_admit_job(
-                                    db, ticker_up, row_dict.get("company_name", ""),
-                                    None, exch_code, not_of_interest=True
-                                )
-                                st.session_state["ingest_disc_actions"][disc_key] = f"Rejected — {ticker_up} added as muted."
-                                st.session_state.pop(f"disc_show_reject_{disc_key}", None)
-                                st.rerun()
-
-        st.markdown("---")
-
-        # ── Suppressed rows (last, collapsed) ─────────────────────────────────
-
-        if supp:
-            with st.expander(f"Suppressed rows ({len(supp)})"):
-                for row_dict, reason in supp:
-                    st.caption(f"[{row_dict['ticker']}] {row_dict['announcement_type']} — {reason}")
-
-    # ── Step 3: Job Status ─────────────────────────────────────────────────────
+    # ── Step 2: Job Status ─────────────────────────────────────────────────────
 
     st.markdown("---")
     hdr_col, refresh_col = st.columns([10, 1])
     with hdr_col:
         st.markdown(
-            '<div class="terminal-header" style="margin-bottom:0.8rem;">Step 3 — Job Status</div>',
+            '<div class="terminal-header" style="margin-bottom:0.8rem;">Step 2 — Job Status</div>',
             unsafe_allow_html=True,
         )
     with refresh_col:
