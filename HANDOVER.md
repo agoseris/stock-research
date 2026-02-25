@@ -7,9 +7,9 @@
 
 ## Current State
 
-App is at **v2.7**. The pipeline is fully operational end-to-end. The Ingest tab has
+App is at **v2.8**. The pipeline is fully operational end-to-end. The Ingest tab has
 been overhauled with a unified announcement table and the deduplication system has been
-fixed to use URL-based fingerprinting. Several post-launch bugs have been fixed.
+fixed to use URL-based fingerprinting. Post-launch bugs fixed and UX polished.
 
 ---
 
@@ -54,6 +54,29 @@ Cleared on new file upload alongside `ingest_cache_key`.
 `_get_processed_source_urls(db)` — `@st.cache_data(ttl=60)` — returns set of
 `source_url` values already in the `announcements` collection. Used to show "✓ Analysed"
 indicator on already-processed rows.
+
+### UX Polish — Universe, Ingest, Discovery (v2.8)
+
+**Universe tab — inline Mute/Unmute:**
+Replaced `st.dataframe` + separate "Actions" section (which duplicated ticker/company
+data) with a single per-row custom layout. Mute/Unmute button is now inline with each
+row. Muted tickers rendered in grey.
+
+**Ingest — submitted state indicator:**
+After clicking Submit, the row now shows `⏳ Submitted` until the VM processes the job
+and the URL appears in the dedup store, at which point it flips to `✓ Analysed`.
+Previously the Submit ▾ button re-appeared immediately after submission.
+New session state key: `ingest_session_submitted` (set of row UIDs). Cleared on new
+file upload.
+
+**Ingest sub-form — URL link and visible close:**
+The LSEG URL link (`Open announcement on LSEG ↗`) and `✕` close button now appear at
+the top of the body-paste sub-form. Previously there was no URL and Cancel was buried
+below the text area in a narrow column.
+
+**Discovery tab — empty state explanation:**
+Replaced terse empty state with a caption explaining how to generate discovery results
+(Ingest → find DISCOVERY row → `→ Pass` → Submit for analysis).
 
 ### Post-Launch Bug Fixes (v2.5–v2.7)
 
