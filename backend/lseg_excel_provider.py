@@ -64,8 +64,10 @@ EXCLUDED_ANNOUNCEMENT_TYPES = [
 # parsed from Col 1. Matched rows are routed to suppressed (auditable), not discarded.
 TRUST_COMPANY_KEYWORDS = [
     "trust",
+    "trst",
     "income",
     "growth",
+    "grwth",
     "fund",
 ]
 

@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.0"
+VERSION = "2.1"
 
 
 
@@ -441,7 +441,7 @@ def submit_job(db, row_dict, body):
 # deployment constraint). Both copies must be kept in sync.
 
 # Mirrors TRUST_COMPANY_KEYWORDS in lseg_excel_provider.py.
-_TRUST_COMPANY_KEYWORDS = ["trust", "income", "growth", "fund"]
+_TRUST_COMPANY_KEYWORDS = ["trust", "trst", "income", "growth", "grwth", "fund"]
 
 
 def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types):
