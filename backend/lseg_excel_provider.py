@@ -33,8 +33,10 @@ from abstractions import Announcement, AnnouncementProviderBase, UniverseStorage
 
 
 # ---------------------------------------------------------------------------
-# Configurable exclusion list
-# Extend here without touching core logic. Match is substring (case-insensitive).
+# Default exclusion list — fallback when Firestore config is unavailable.
+# In production the authoritative list lives in Firestore app_config/lseg_filters
+# and is injected at construction time. This constant is retained for backwards
+# compatibility and for offline test invocations via __main__.
 # ---------------------------------------------------------------------------
 
 EXCLUDED_ANNOUNCEMENT_TYPES = [
@@ -55,6 +57,21 @@ EXCLUDED_ANNOUNCEMENT_TYPES = [
     "Director Declaration",
     "Conversion of B Shares",
 ]
+
+
+def load_exclusion_list(db) -> list:
+    """
+    Load the exclusion list from Firestore app_config/lseg_filters.
+    Falls back to EXCLUDED_ANNOUNCEMENT_TYPES if the document does not exist
+    or Firestore is unavailable.
+    """
+    try:
+        doc = db.collection("app_config").document("lseg_filters").get()
+        if doc.exists:
+            return doc.to_dict().get("excluded_announcement_types", EXCLUDED_ANNOUNCEMENT_TYPES)
+    except Exception as e:
+        print(f"load_exclusion_list: Firestore read failed ({e}) — using default list.")
+    return list(EXCLUDED_ANNOUNCEMENT_TYPES)
 
 
 # ---------------------------------------------------------------------------
@@ -144,9 +161,11 @@ class LSEGExcelProvider(AnnouncementProviderBase):
         self,
         file_path: str,
         universe_storage: Optional[UniverseStorageProviderBase] = None,
+        excluded_types: Optional[List[str]] = None,
     ):
         self._file_path = file_path
         self._universe_storage = universe_storage
+        self._excluded_types: List[str] = excluded_types if excluded_types is not None else list(EXCLUDED_ANNOUNCEMENT_TYPES)
         self._universe_tickers: Optional[Set[str]] = None  # lazy-loaded on first parse
 
     # ------------------------------------------------------------------
@@ -245,14 +264,14 @@ class LSEGExcelProvider(AnnouncementProviderBase):
             return None
         return str(val).strip()
 
-    @staticmethod
-    def _matches_exclusion(ann_type: str) -> Optional[str]:
+    def _matches_exclusion(self, ann_type: str) -> Optional[str]:
         """
         Return the matching exclusion string if ann_type is on the exclusion list,
         or None if it passes. Matching is case-insensitive substring.
+        Uses self._excluded_types (injected at construction or defaulting to module constant).
         """
         ann_lower = ann_type.lower()
-        for excluded in EXCLUDED_ANNOUNCEMENT_TYPES:
+        for excluded in self._excluded_types:
             if excluded.lower() in ann_lower:
                 return excluded
         return None
@@ -392,14 +411,19 @@ if __name__ == "__main__":
 
     file_path = sys.argv[1] if len(sys.argv) > 1 else "../docs/LSEG_news_capture.xlsx"
 
+    universe_storage = None
+    excluded_types = None
     try:
+        from google.cloud import firestore as _firestore
         from storage_firestore_universe import FirestoreUniverseProvider
+        _db = _firestore.Client()
         universe_storage = FirestoreUniverseProvider()
+        excluded_types = load_exclusion_list(_db)
+        print(f"Exclusion list loaded from Firestore ({len(excluded_types)} entries).\n")
     except Exception as e:
-        print(f"Firestore unavailable ({e}) — running without universe filter.\n")
-        universe_storage = None
+        print(f"Firestore unavailable ({e}) — running without universe filter, using default exclusion list.\n")
 
-    provider = LSEGExcelProvider(file_path, universe_storage=universe_storage)
+    provider = LSEGExcelProvider(file_path, universe_storage=universe_storage, excluded_types=excluded_types)
 
     print(f"Parsing: {file_path}\n")
     result = provider.parse_excel()

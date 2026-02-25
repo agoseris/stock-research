@@ -20,31 +20,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.5"
+VERSION = "1.6"
 
-# ---------------------------------------------------------------------------
-# Announcement type exclusion list — shared with backend/lseg_excel_provider.py
-# Extend here without touching filter logic. Match is case-insensitive substring.
-# ---------------------------------------------------------------------------
-
-EXCLUDED_ANNOUNCEMENT_TYPES = [
-    "Holding(s) in Company",
-    "Notice of AGM",
-    "Notice of Results",
-    "Annual Report",
-    "Half-Year Report",
-    "Interim Report",
-    "Confirmation Statement",
-    "Change of Registered Office",
-    "Change of Nominated Adviser",
-    "Change of Broker",
-    "Total Voting Rights",
-    "Blocklisting Interim Review",
-    "Publication of Prospectus",
-    "Result of AGM",
-    "Director Declaration",
-    "Conversion of B Shares",
-]
 
 
 # ── Page config ────────────────────────────────────────────────────────────────
@@ -53,7 +30,7 @@ st.set_page_config(
     page_title="LSE Research Terminal",
     page_icon="📡",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ── Styling ────────────────────────────────────────────────────────────────────
@@ -70,6 +47,8 @@ html, body, [class*="css"] {
 
 /* Hide Streamlit chrome */
 #MainMenu, footer, header { visibility: hidden; }
+/* Keep sidebar toggle visible despite hidden header */
+[data-testid="collapsedControl"] { visibility: visible !important; }
 .block-container { padding: 2rem 2.5rem 2rem 2.5rem; max-width: 1400px; }
 
 /* Terminal header */
@@ -351,6 +330,56 @@ def dismiss_document(db, collection, doc_id):
 
 # ── Universe and job helpers ───────────────────────────────────────────────────
 
+# ── Config store ───────────────────────────────────────────────────────────────
+
+_CONFIG_COLLECTION = "app_config"
+_LSEG_FILTERS_DOC = "lseg_filters"
+
+# Seed list used when the Firestore document does not yet exist.
+_DEFAULT_EXCLUDED_TYPES = [
+    "Holding(s) in Company",
+    "Notice of AGM",
+    "Notice of Results",
+    "Annual Report",
+    "Half-Year Report",
+    "Interim Report",
+    "Confirmation Statement",
+    "Change of Registered Office",
+    "Change of Nominated Adviser",
+    "Change of Broker",
+    "Total Voting Rights",
+    "Blocklisting Interim Review",
+    "Publication of Prospectus",
+    "Result of AGM",
+    "Director Declaration",
+    "Conversion of B Shares",
+]
+
+
+@st.cache_data(ttl=60)
+def get_exclusion_list(_db):
+    """
+    Load the announcement type exclusion list from Firestore app_config/lseg_filters.
+    Seeds the document from _DEFAULT_EXCLUDED_TYPES on first call if it does not exist.
+    Cached for 60 seconds so UI edits propagate quickly.
+    """
+    ref = _db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC)
+    doc = ref.get()
+    if doc.exists:
+        return doc.to_dict().get("excluded_announcement_types", [])
+    # First run — seed Firestore from the default list
+    ref.set({"excluded_announcement_types": _DEFAULT_EXCLUDED_TYPES})
+    return list(_DEFAULT_EXCLUDED_TYPES)
+
+
+def save_exclusion_list(db, excluded_types):
+    """Persist the exclusion list to Firestore and invalidate the cache."""
+    db.collection(_CONFIG_COLLECTION).document(_LSEG_FILTERS_DOC).set(
+        {"excluded_announcement_types": excluded_types}
+    )
+    get_exclusion_list.clear()
+
+
 @st.cache_data(ttl=300)
 def get_universe_tickers(_db):
     """Fetch the set of all LSE tickers in the Firestore universe. Cached for 5 minutes."""
@@ -411,7 +440,7 @@ def submit_job(db, row_dict, body):
 # frontend/app.py must not import from backend/ (Streamlit Community Cloud
 # deployment constraint). Both copies must be kept in sync.
 
-def _parse_lseg_excel(file_bytes, universe_tickers):
+def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types):
     """
     Parse LSEG Excel export bytes and apply pre-filters.
 
@@ -421,7 +450,7 @@ def _parse_lseg_excel(file_bytes, universe_tickers):
     Filtering order:
       1. Source filter   — only RNS rows proceed
       2. Universe filter — non-universe rows route to discovery
-      3. Type filter     — EXCLUDED_ANNOUNCEMENT_TYPES suppressed (logged)
+      3. Type filter     — excluded_types (loaded from Firestore app_config) suppressed
     """
 
     def _parse_dt(date_val, time_val):
@@ -521,7 +550,7 @@ def _parse_lseg_excel(file_bytes, universe_tickers):
         # Filter 3: Announcement type
         ann_lower = ann_type.lower()
         excluded_match = next(
-            (ex for ex in EXCLUDED_ANNOUNCEMENT_TYPES if ex.lower() in ann_lower),
+            (ex for ex in excluded_types if ex.lower() in ann_lower),
             None,
         )
         if excluded_match:
@@ -775,8 +804,9 @@ with tab_ingest:
         # Only re-parse when a new file is uploaded
         if st.session_state.get("ingest_file_name") != uploaded_file.name:
             universe_tickers = get_universe_tickers(db)
+            excluded_types = get_exclusion_list(db)
             file_bytes = uploaded_file.read()
-            st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers)
+            st.session_state["ingest_result"] = _parse_lseg_excel(file_bytes, universe_tickers, excluded_types)
             st.session_state["ingest_file_name"] = uploaded_file.name
             st.session_state.pop("ingest_submitted", None)
 
@@ -926,9 +956,12 @@ with tab_ingest:
                 unsafe_allow_html=True,
             )
 
-# ── Sidebar: Universe Lookup ───────────────────────────────────────────────────
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
+
+    # ── Universe Lookup ────────────────────────────────────────────────────────
+
     st.markdown(
         '<div class="terminal-header" style="margin-bottom:0.6rem;">Universe Lookup</div>',
         unsafe_allow_html=True,
@@ -963,3 +996,36 @@ with st.sidebar:
                 st.caption("Signal count unavailable.")
         else:
             st.warning(f"**{ticker_q}** is not in the universe")
+
+    st.markdown("---")
+
+    # ── Filtration Rules ───────────────────────────────────────────────────────
+
+    st.markdown(
+        '<div class="terminal-header" style="margin-bottom:0.6rem;">Filtration Rules</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Announcement types suppressed before LLM analysis. Match is case-insensitive substring.")
+
+    current_excluded = get_exclusion_list(db)
+
+    for entry in current_excluded:
+        col_label, col_btn = st.columns([5, 1])
+        col_label.caption(entry)
+        if col_btn.button("×", key=f"remove_excl_{entry}"):
+            updated = [e for e in current_excluded if e != entry]
+            save_exclusion_list(db, updated)
+            st.rerun()
+
+    st.markdown("")
+    new_type = st.text_input(
+        "Add type",
+        key="new_excl_type",
+        placeholder="e.g. Result of EGM",
+        label_visibility="collapsed",
+    )
+    if st.button("Add", key="add_excl_type_btn") and new_type.strip():
+        entry = new_type.strip()
+        if entry not in current_excluded:
+            save_exclusion_list(db, current_excluded + [entry])
+        st.rerun()
