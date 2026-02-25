@@ -1,20 +1,63 @@
 # Session Handover
 **Date:** 25 February 2026
 **Branch:** `master`
-**Last commit:** 64b7479 — Feat: add 'trst' and 'grwth' to trust/fund company name filter (v2.1)
+**Last commit:** (see git log)
 
 ---
 
 ## Current State
 
-The pipeline is fully operational end-to-end. Signals are being analysed and surfaced
-via the Streamlit UI and Telegram. The interactive LSEG Excel ingestion workflow is
-confirmed working in production. The system "works" but the UI needs refinement —
-that is the primary next task.
+App is at **v2.4**. The pipeline is fully operational end-to-end. The Ingest tab has
+been overhauled with a unified announcement table (v2.4) and the deduplication system
+has been fixed to use URL-based fingerprinting.
 
 ---
 
-## What Was Built / Changed This Session
+## What Was Built / Changed This Session (v2.4)
+
+### Deduplication Fix (backend)
+
+- `storage_firestore.py`: `save_announcement()` now uses `source_url` as the Firestore
+  document ID key (falls back to headline if URL absent). `announcement_exists()` now
+  uses a direct document ID lookup (fast, no index scan) keyed on URL.
+- `job_runner.py`: dedup check switched from `headline_exists()` to
+  `announcement_exists(url, headline)`. `save_announcement()` moved to run immediately
+  after the dedup check passes, before routing — ensures all attempted announcements are
+  fingerprinted regardless of pre_filter or LLM outcome.
+
+### Ingest Tab — Unified Announcement Table (v2.4)
+
+Replaced the fragmented layout (Passed table → Step 2 expanders → Discovery expanders →
+Suppressed expander) with a single unified table showing all announcements:
+
+- **Outcome badge** (PASSED / DISCOVERY / MUTED / SUPPRESSED) with colour coding
+- **Sort** (Outcome / Date / Ticker / Company) and **Filter** (All / Passed / Discovery /
+  Muted / Suppressed) controls above the table
+- **Dismiss (✕)** — removes a row from the current session without affecting Firestore
+- **Mute** — calls `mark_not_of_interest()` and immediately reflects as MUTED without
+  requiring a re-parse
+- **Submit ▾** (Passed rows) — inline body-paste sub-form. Shows "✓ Analysed" if the
+  row's source_url is already in the announcements dedup store.
+- **+ Univ / → Pass** (Discovery rows) — admit to universe (sub-form) or promote to
+  Passed inline
+- Reason shown for MUTED/SUPPRESSED rows in action column
+- Old standalone "Mute a ticker" section, "Step 2 — Submit for Analysis" expanders,
+  "Discovery Candidates" expanders, and "Suppressed rows" expander are all removed
+- Step 3 → Step 2 (Job Status)
+
+Session state: `ingest_dismissed` (set of row UIDs), `ingest_session_muted` (set of
+tickers muted this session), `ingest_subform_open` (row key of open sub-form).
+Cleared on new file upload alongside `ingest_cache_key`.
+
+### New Helper
+
+`_get_processed_source_urls(db)` — `@st.cache_data(ttl=60)` — returns set of
+`source_url` values already in the `announcements` collection. Used to show "✓ Analysed"
+indicator on already-processed rows.
+
+---
+
+## What Was Built / Changed Previously (v2.1–v2.3)
 
 ### Trust / Fund Company Name Filter (Filter 2.5)
 
