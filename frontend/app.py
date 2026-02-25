@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.7"
+VERSION = "2.8"
 
 
 
@@ -825,7 +825,14 @@ with tab_signals:
 
 with tab_discovery:
     if not discoveries:
-        st.markdown('<div class="empty-state">NO DISCOVERY ITEMS · All items reviewed or pipeline has not run yet</div>', unsafe_allow_html=True)
+        st.markdown('<div class="empty-state">NO DISCOVERY ITEMS</div>', unsafe_allow_html=True)
+        st.caption(
+            "Discovery results are created when the job runner processes a company that is "
+            "not in the monitored universe. To generate one: upload an LSEG export in the "
+            "Ingest tab, find a row with outcome DISCOVERY, click → Pass to move it to "
+            "Passed, then submit it for analysis. The job runner routes non-universe "
+            "submissions here automatically."
+        )
     else:
         def discovery_sort_key(item):
             val = get_field(item[1].get("discovery_assessment", ""), "RECOMMEND_ADD").lower()
@@ -979,44 +986,39 @@ with tab_universe:
         st.rerun()
 
     if page_companies:
-        import pandas as pd
+        # Column headers
+        hdr = st.columns([1.2, 4, 1.2, 1.5, 1.5, 1, 1.5, 1.5])
+        for col, lbl in zip(hdr, ["Ticker", "Company", "Exchange", "Mkt Cap (£M)", "CH Conf", "Muted", "Added", "Action"]):
+            col.caption(f"**{lbl}**")
+        st.markdown('<hr style="margin:0.2rem 0 0.5rem 0;border-color:#1a2535;"/>', unsafe_allow_html=True)
 
-        def _ch_conf_label(c):
-            conf = c.get("companies_house_confidence")
-            if conf is None:
-                return "—"
-            if conf >= 1.0:
-                return "Exact"
-            return f"{conf:.2f}"
-
-        df_universe = pd.DataFrame([{
-            "Ticker": c.get("ticker_lse", ""),
-            "Company": c.get("company_name", ""),
-            "Exchange": c.get("listing_exchange", ""),
-            "Market Cap (£M)": (
-                f"{c['market_cap_gbp'] / 1_000_000:.0f}"
-                if c.get("market_cap_gbp") else "—"
-            ),
-            "CH Confidence": _ch_conf_label(c),
-            "Muted": "●" if c.get("not_of_interest", False) else "",
-            "Added": c.get("universe_added_date", "")[:10] if c.get("universe_added_date") else "—",
-        } for c in page_companies])
-
-        st.dataframe(df_universe, hide_index=True, width="stretch")
-
-        # Mute / Unmute buttons below table — one per company on current page
-        st.markdown(
-            '<div class="terminal-header" style="margin-top:0.8rem;margin-bottom:0.5rem;">Actions</div>',
-            unsafe_allow_html=True,
-        )
         for idx, c in enumerate(page_companies):
             ticker = c.get("ticker_lse", "")
             is_muted = c.get("not_of_interest", False)
-            label = "Unmute" if is_muted else "Mute"
-            btn_cols = st.columns([2, 2, 6])
-            btn_cols[0].caption(f"**{ticker}**")
-            btn_cols[1].caption(c.get("company_name", "")[:40])
-            if btn_cols[2].button(label, key=f"universe_mute_{ticker}_{idx}"):
+            mcap = c.get("market_cap_gbp")
+            mcap_str = f"{mcap / 1_000_000:.0f}" if mcap else "—"
+            conf = c.get("companies_house_confidence")
+            conf_str = "Exact" if conf and conf >= 1.0 else (f"{conf:.2f}" if conf else "—")
+            added = c.get("universe_added_date", "")
+            added_str = str(added)[:10] if added else "—"
+
+            (c_tick, c_comp, c_exch, c_mcap_col, c_ch, c_mut, c_added, c_action) = st.columns(
+                [1.2, 4, 1.2, 1.5, 1.5, 1, 1.5, 1.5]
+            )
+            c_tick.markdown(
+                f'<span style="font-size:0.8rem;font-family:\'IBM Plex Mono\',monospace;'
+                f'{"color:#7f8c8d;" if is_muted else ""}">{ticker}</span>',
+                unsafe_allow_html=True,
+            )
+            c_comp.caption(c.get("company_name", "—")[:42])
+            c_exch.caption(c.get("listing_exchange", "—"))
+            c_mcap_col.caption(mcap_str)
+            c_ch.caption(conf_str)
+            c_mut.caption("●" if is_muted else "")
+            c_added.caption(added_str)
+
+            mute_label = "Unmute" if is_muted else "Mute"
+            if c_action.button(mute_label, key=f"universe_mute_{ticker}_{idx}"):
                 mark_not_of_interest(db, ticker, not is_muted)
                 st.rerun()
     else:
@@ -1094,11 +1096,13 @@ with tab_ingest:
             # Clear per-file session state on new upload
             st.session_state["ingest_dismissed"] = set()
             st.session_state["ingest_session_muted"] = set()
+            st.session_state["ingest_session_submitted"] = set()
             st.session_state.pop("ingest_subform_open", None)
 
     # Initialise session state keys used by the unified table
     st.session_state.setdefault("ingest_dismissed", set())
     st.session_state.setdefault("ingest_session_muted", set())
+    st.session_state.setdefault("ingest_session_submitted", set())
 
     if "ingest_result" in st.session_state:
         result = st.session_state["ingest_result"]
@@ -1252,6 +1256,8 @@ with tab_ingest:
             if row["outcome"] == "passed":
                 if src_url and src_url in processed_urls:
                     c_action.caption("✓ Analysed")
+                elif row_uid in st.session_state["ingest_session_submitted"]:
+                    c_action.caption("⏳ Submitted")
                 else:
                     row_key = f"body_{i}"
                     if c_action.button("Submit ▾", key=f"open_body_{i}"):
@@ -1263,6 +1269,12 @@ with tab_ingest:
 
                     if st.session_state.get(subform_key) == row_key:
                         with st.container():
+                            form_hdr, form_close = st.columns([9, 1])
+                            if src_url:
+                                form_hdr.markdown(f"[Open announcement on LSEG ↗]({src_url})")
+                            if form_close.button("✕", key=f"cancel_{i}", help="Close"):
+                                st.session_state.pop(subform_key, None)
+                                st.rerun()
                             body = st.text_area(
                                 "Paste announcement body",
                                 key=row_key,
@@ -1270,18 +1282,15 @@ with tab_ingest:
                                 placeholder="Copy and paste the full announcement text...",
                                 label_visibility="collapsed",
                             )
-                            col_submit, col_cancel = st.columns([2, 1])
-                            if col_submit.button(
+                            if st.button(
                                 "Submit for analysis",
                                 key=f"submit_{i}",
                                 disabled=not (body or "").strip(),
                             ):
                                 submit_job(db, row, body)
+                                st.session_state["ingest_session_submitted"].add(row_uid)
                                 st.session_state.pop(subform_key, None)
                                 _get_processed_source_urls.clear()
-                                st.rerun()
-                            if col_cancel.button("Cancel", key=f"cancel_{i}"):
-                                st.session_state.pop(subform_key, None)
                                 st.rerun()
 
             elif row["outcome"] == "discovery":
