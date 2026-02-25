@@ -350,17 +350,20 @@ REASON: [one sentence]"""
         try:
             announcement = self._build_announcement(job)
 
-            # Deduplication — skip if this headline has already been processed
-            if self.storage.headline_exists(announcement.headline):
+            # Deduplication — skip if this announcement has already been processed
+            if self.storage.announcement_exists(announcement.source_url, announcement.headline):
                 print(f"  [{ticker}] Already processed (deduplication) — skipping.")
                 self._complete_job(job_id, note="deduplicated")
                 return
+
+            # Fingerprint immediately so re-submissions are caught even if pre_filter
+            # or LLM rejects this announcement
+            self.storage.save_announcement(announcement)
 
             if ticker.upper() in self._universe_tickers:
                 result = self._run_signal_analysis(announcement)
                 if result:
                     self.storage.save_signal_result(result)
-                    self.storage.save_announcement(announcement)
                     self._notify_signal(result)
                     self._complete_job(job_id)
                     print(f"  [{ticker}] Signal result saved.")
@@ -371,7 +374,6 @@ REASON: [one sentence]"""
                 result = self._run_discovery_assessment(announcement)
                 if result:
                     self.storage.save_discovery_result(result)
-                    self.storage.save_announcement(announcement)
                     self._notify_discovery(result)
                     self._complete_job(job_id)
                     print(f"  [{ticker}] Discovery result saved.")
