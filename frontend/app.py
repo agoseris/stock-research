@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "1.8"
+VERSION = "1.9"
 
 
 
@@ -845,6 +845,7 @@ with tab_ingest:
                 "Ticker": r["ticker"],
                 "Company": r["company_name"],
                 "Type": r["announcement_type"],
+                "Date": r["published_at"].strftime("%d %b") if r["published_at"] else "—",
                 "Time": r["published_at"].strftime("%H:%M") if r["published_at"] else "—",
                 "Price (p)": r["price_pence"] if r["price_pence"] is not None else "—",
                 "Change": r["price_change_pct"] if r["price_change_pct"] else "—",
