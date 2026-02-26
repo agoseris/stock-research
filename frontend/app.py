@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.9"
+VERSION = "2.10"
 
 
 
@@ -1032,7 +1032,7 @@ with tab_universe:
         ma_ticker = ma_col1.text_input("Ticker (LSE)", placeholder="e.g. ACME", key="manual_add_ticker")
         ma_exchange = ma_col2.selectbox("Exchange", ["AIM", "LSE Main"], key="manual_add_exchange")
         ma_name = st.text_input("Company Name", placeholder="e.g. Acme Industries PLC", key="manual_add_name")
-        ma_mcap = st.number_input("Market Cap (£M, optional)", min_value=0.0, max_value=1000.0, value=0.0, key="manual_add_mcap")
+        ma_mcap = st.number_input("Market Cap (£M, optional)", min_value=0.0, value=0.0, key="manual_add_mcap")
         if st.button("Add to Universe", key="manual_add_submit"):
             if ma_ticker.strip() and ma_name.strip():
                 exch_code = "AIM" if ma_exchange == "AIM" else "LSE_MAIN"
@@ -1321,7 +1321,7 @@ with tab_ingest:
                         a_ticker   = st.text_input("Ticker",       value=row.get("ticker", ""),       key=f"da_t_{i}")
                         a_name     = st.text_input("Company Name", value=row.get("company_name", ""), key=f"da_n_{i}")
                         a_exchange = st.selectbox("Exchange",      ["AIM", "LSE Main"],               key=f"da_e_{i}")
-                        a_mcap     = st.number_input("Market Cap (£M, optional)", 0.0, 1000.0, 0.0,  key=f"da_m_{i}")
+                        a_mcap     = st.number_input("Market Cap (£M, optional)", min_value=0.0, value=0.0, key=f"da_m_{i}")
                         col_sub, col_can = st.columns([2, 1])
                         if col_sub.button("Submit admission", key=f"da_submit_{i}"):
                             exch_code = "AIM" if a_exchange == "AIM" else "LSE_MAIN"
