@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.10"
+VERSION = "2.11"
 
 
 
@@ -1260,7 +1260,7 @@ with tab_ingest:
                     c_action.caption("⏳ Submitted")
                 else:
                     row_key = f"body_{i}"
-                    if c_action.button("Submit ▾", key=f"open_body_{i}"):
+                    if c_action.button("Analyse ▾", key=f"open_body_{i}"):
                         if st.session_state.get(subform_key) == row_key:
                             st.session_state.pop(subform_key, None)
                         else:
