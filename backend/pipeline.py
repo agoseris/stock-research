@@ -88,8 +88,11 @@ class AnalysisPipeline:
         result = [
             {"ticker": c.ticker_lse, "name": c.company_name}
             for c in companies
+            if not c.not_of_interest
         ]
-        print(f"Universe loaded from Firestore: {len(result)} companies.")
+        muted = len(companies) - len(result)
+        print(f"Universe loaded from Firestore: {len(result)} companies "
+              f"({muted} muted, excluded from pipeline).")
         return result
 
     def _is_in_universe(self, announcement: Announcement) -> bool:
