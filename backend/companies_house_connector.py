@@ -67,9 +67,9 @@ class CompaniesHouseProvider(AnnouncementProviderBase):
             print(f"Companies House error for {company_number}: {e}")
             return []
 
-    def get_recent_announcements(self, max_results: int = 50) -> List[Announcement]:
+    def get_recent_announcements(self, max_results: int = 500) -> List[Announcement]:
         announcements = []
-        cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=2)
 
         # Load CH numbers and confidence scores from Firestore universe
         if self._universe_storage is None:
@@ -127,9 +127,6 @@ class CompaniesHouseProvider(AnnouncementProviderBase):
                     companies_house_confidence=ch_confidence,
                 )
                 announcements.append(announcement)
-
-                if len(announcements) >= max_results:
-                    return announcements
 
         return announcements
 

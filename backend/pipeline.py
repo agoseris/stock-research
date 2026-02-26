@@ -341,7 +341,7 @@ if __name__ == "__main__":
     storage = FirestoreProvider()
     universe_storage = FirestoreUniverseProvider()
     pipeline = AnalysisPipeline(storage=storage, universe_storage=universe_storage)
-    signal_results, discovery_results = pipeline.run(max_announcements=30)
+    signal_results, discovery_results = pipeline.run(max_announcements=500)
 
     # Surface any strong signals
     print("\n--- RECOMMENDED ACTIONS ---")
