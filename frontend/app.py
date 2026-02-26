@@ -9,6 +9,7 @@ Run with:
     streamlit run app.py
 """
 
+import csv
 import io
 import os
 from datetime import date, datetime, time, timezone
@@ -20,7 +21,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.12"
+VERSION = "2.13"
 
 
 
@@ -456,6 +457,80 @@ def submit_universe_admit_job(db, ticker, company_name, market_cap_gbp,
         "listing_exchange": listing_exchange,
         "not_of_interest": not_of_interest,
         "source_discovery_id": source_discovery_id,
+    }
+    db.collection("pending_jobs").add(job)
+
+
+def _parse_universe_csv(file_bytes: bytes) -> list:
+    """
+    Parse a universe CSV file and return a list of company dicts.
+
+    Expected columns: Exchange, Code, Name, Market Cap
+    Exchange: "AIM" → "AIM", anything else → "LSE_MAIN"
+    Market Cap: in millions GBP; strip commas and multiply by 1,000,000.
+    Rows missing ticker or name are skipped.
+    """
+    content = file_bytes.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(content))
+    companies = []
+    for row in reader:
+        ticker = (row.get("Code") or "").strip()
+        name = (row.get("Name") or "").strip()
+        if not ticker or not name:
+            continue
+        exchange_raw = (row.get("Exchange") or "").strip()
+        listing_exchange = "AIM" if exchange_raw.upper() == "AIM" else "LSE_MAIN"
+        tier = 2 if listing_exchange == "AIM" else 1
+        mcap_raw = (row.get("Market Cap") or "").strip().replace(",", "")
+        try:
+            market_cap_gbp = float(mcap_raw) * 1_000_000 if mcap_raw else None
+        except ValueError:
+            market_cap_gbp = None
+        companies.append({
+            "ticker": ticker,
+            "company_name": name,
+            "market_cap_gbp": market_cap_gbp,
+            "listing_exchange": listing_exchange,
+            "tier": tier,
+        })
+    return companies
+
+
+def _compute_universe_delta(parsed_rows: list, existing_companies: list) -> dict:
+    """
+    Compute delta between a parsed CSV and the current Firestore universe.
+
+    Returns:
+      new    — rows in parsed not in existing
+      update — rows in both parsed and existing
+      absent — existing companies whose ticker is not in parsed
+    """
+    existing_by_ticker = {
+        c.get("ticker_lse", "").upper(): c
+        for c in existing_companies
+        if c.get("ticker_lse")
+    }
+    parsed_tickers = {r["ticker"].upper() for r in parsed_rows}
+    new_companies = [r for r in parsed_rows if r["ticker"].upper() not in existing_by_ticker]
+    update_companies = [r for r in parsed_rows if r["ticker"].upper() in existing_by_ticker]
+    absent_companies = [
+        c for c in existing_companies
+        if c.get("ticker_lse", "").upper() not in parsed_tickers
+    ]
+    return {"new": new_companies, "update": update_companies, "absent": absent_companies}
+
+
+def submit_universe_bulk_import_job(db, new_companies, update_companies,
+                                     remove_tickers, mute_tickers):
+    """Write a universe_bulk_import job to the pending_jobs collection."""
+    job = {
+        "job_type": "universe_bulk_import",
+        "status": "pending",
+        "submitted_at": firestore.SERVER_TIMESTAMP,
+        "new_companies": new_companies,
+        "update_companies": update_companies,
+        "remove_tickers": remove_tickers,
+        "mute_tickers": mute_tickers,
     }
     db.collection("pending_jobs").add(job)
 
@@ -908,7 +983,6 @@ with tab_universe:
 
 **Inclusion criteria:**
 - Listed on AIM or FTSE Main Market
-- Market capitalisation ≤ £1B at time of inclusion
 - Active operating company (trusts, funds, SPACs excluded)
 
 **Companies House matching:**
@@ -1041,6 +1115,146 @@ with tab_universe:
                 st.success("Submitted — CH lookup running on VM. Results appear in ~30 seconds.")
             else:
                 st.warning("Ticker and Company Name are required.")
+
+    # File import section
+    with st.expander("📂 Import from file"):
+        # Use a counter in the key so Cancel can reset the file uploader widget
+        _file_key = st.session_state.get("universe_import_file_key", 0)
+        ui_file = st.file_uploader(
+            "Universe CSV", type=["csv"],
+            key=f"universe_import_file_{_file_key}",
+            help="CSV with columns: Exchange, Code, Name, Market Cap (values in £M)",
+        )
+
+        # Parse on new file upload (cache by filename)
+        if ui_file is not None:
+            _cache_key = (ui_file.name,)
+            if st.session_state.get("universe_import_cache_key") != _cache_key:
+                try:
+                    _parsed = _parse_universe_csv(ui_file.getvalue())
+                    _existing = get_all_universe_companies(db)
+                    _delta = _compute_universe_delta(_parsed, _existing)
+                    st.session_state["universe_import_cache_key"] = _cache_key
+                    st.session_state["universe_import_delta"] = _delta
+                    st.session_state["universe_import_absent_decisions"] = {}
+                    st.session_state["universe_import_submitted"] = False
+                except Exception as _e:
+                    st.error(f"Could not parse CSV: {_e}")
+
+        _delta = st.session_state.get("universe_import_delta")
+        _submitted = st.session_state.get("universe_import_submitted", False)
+
+        if _delta is None:
+            st.caption("Upload a CSV with columns: Exchange, Code, Name, Market Cap (values in £M)")
+
+        elif _submitted:
+            st.success(
+                "✓ Submitted — job_runner processing on VM. "
+                "New companies require CH lookup (~0.6s each)."
+            )
+            try:
+                _all_jobs = get_pending_jobs(db, limit=10)
+                _import_jobs = [(jid, j) for jid, j in _all_jobs
+                                if j.get("job_type") == "universe_bulk_import"]
+                if _import_jobs:
+                    _jid, _jdata = _import_jobs[0]
+                    st.caption(
+                        f"Most recent bulk import job: {_jid[:8]}… — "
+                        f"status: {_jdata.get('status', '?')}"
+                    )
+            except Exception:
+                pass
+
+        else:
+            _n_new = len(_delta["new"])
+            _n_update = len(_delta["update"])
+            _n_absent = len(_delta["absent"])
+            st.markdown(f"**{_n_new} new · {_n_update} updates · {_n_absent} not in file**")
+
+            _decisions = st.session_state.get("universe_import_absent_decisions", {})
+
+            if _n_absent > 0:
+                st.caption(
+                    "Companies in Firestore not present in the uploaded file. "
+                    "Default action: leave unchanged."
+                )
+
+                # Column headers
+                _ah = st.columns([1.2, 4, 1.2, 1.5, 1, 1, 1])
+                for _col, _lbl in zip(_ah, ["Ticker", "Company", "Exchange", "Mkt Cap (£M)", "Muted", "", ""]):
+                    _col.caption(f"**{_lbl}**")
+
+                for _ac in _delta["absent"]:
+                    _aticker = _ac.get("ticker_lse", "")
+                    _aname = _ac.get("company_name", "")
+                    _aexch = _ac.get("listing_exchange", "")
+                    _amcap = _ac.get("market_cap_gbp")
+                    _amcap_str = f"{_amcap / 1_000_000:.0f}" if _amcap else "—"
+                    _amuted = _ac.get("not_of_interest", False)
+                    _decision = _decisions.get(_aticker)
+
+                    _ra, _rb, _rc, _rd, _re, _rf1, _rf2 = st.columns([1.2, 4, 1.2, 1.5, 1, 1, 1])
+                    _tick_style = "color:#7f8c8d;" if _amuted else ""
+                    _ra.markdown(
+                        f'<span style="font-size:0.8rem;font-family:IBM Plex Mono,monospace;'
+                        f'{_tick_style}">{_aticker}</span>',
+                        unsafe_allow_html=True,
+                    )
+                    _rb.caption(_aname[:42])
+                    _rc.caption(_aexch)
+                    _rd.caption(_amcap_str)
+                    _re.caption("●" if _amuted else "")
+
+                    if _decision == "mute":
+                        _rf1.markdown("**WILL MUTE**")
+                        if _rf2.button("undo", key=f"uimport_undo_{_aticker}"):
+                            _decisions.pop(_aticker, None)
+                            st.session_state["universe_import_absent_decisions"] = dict(_decisions)
+                            st.rerun()
+                    elif _decision == "remove":
+                        _rf1.markdown("**WILL REMOVE**")
+                        if _rf2.button("undo", key=f"uimport_undo_{_aticker}"):
+                            _decisions.pop(_aticker, None)
+                            st.session_state["universe_import_absent_decisions"] = dict(_decisions)
+                            st.rerun()
+                    else:
+                        if _rf1.button("Mute", key=f"uimport_mute_{_aticker}"):
+                            _decisions[_aticker] = "mute"
+                            st.session_state["universe_import_absent_decisions"] = dict(_decisions)
+                            st.rerun()
+                        if _rf2.button("Remove", key=f"uimport_remove_{_aticker}"):
+                            _decisions[_aticker] = "remove"
+                            st.session_state["universe_import_absent_decisions"] = dict(_decisions)
+                            st.rerun()
+
+            st.markdown("")
+            _btn_cancel, _btn_commit = st.columns([1, 1])
+
+            if _btn_cancel.button("Cancel", key="uimport_cancel"):
+                for _k in ["universe_import_cache_key", "universe_import_delta",
+                           "universe_import_absent_decisions", "universe_import_submitted"]:
+                    st.session_state.pop(_k, None)
+                st.session_state["universe_import_file_key"] = _file_key + 1
+                st.rerun()
+
+            if _btn_commit.button("Commit import", key="uimport_commit", type="primary"):
+                _remove_tickers = [t for t, d in _decisions.items() if d == "remove"]
+                _mute_tickers = [t for t, d in _decisions.items() if d == "mute"]
+                try:
+                    submit_universe_bulk_import_job(
+                        db,
+                        new_companies=_delta["new"],
+                        update_companies=_delta["update"],
+                        remove_tickers=_remove_tickers,
+                        mute_tickers=_mute_tickers,
+                    )
+                    st.session_state["universe_import_submitted"] = True
+                    get_all_universe_companies.clear()
+                    get_universe_stats.clear()
+                    get_universe_tickers.clear()
+                    st.rerun()
+                except Exception as _e:
+                    st.error(f"Failed to submit: {_e}")
 
 # ── Ingest tab ─────────────────────────────────────────────────────────────────
 

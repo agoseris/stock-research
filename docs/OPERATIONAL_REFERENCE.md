@@ -1,6 +1,6 @@
 # Operational Reference — Stock Research System
 
-*Last updated: 25 February 2026 · App version: 1.7*
+*Last updated: 26 February 2026 · App version: 2.13*
 
 ---
 
@@ -108,7 +108,7 @@ echo "Deployment complete."
 Firestore collections:
 | Collection | Purpose |
 |------------|---------|
-| `universe_companies` | 845-company investment universe |
+| `universe_companies` | 847-company investment universe |
 | `universe_refresh_log` | Universe build history |
 | `announcements` | Processed announcements (deduplication) |
 | `signal_results` | LLM analysis results — monitored companies |
@@ -158,20 +158,34 @@ LSEG index codes: `AXX` = FTSE AIM All-Share · `SMX` = FTSE Small Cap · `ASX` 
 
 ### 5.1 Universe Management
 
-The monitored universe is 845 LSE small-cap companies (547 AIM + 298 FTSE All-Share),
-subject to a £1B market cap ceiling. It is stored in Firestore (`universe_companies`)
-and loaded by the pipeline at startup.
+The monitored universe is 847 LSE small-cap companies stored in Firestore
+(`universe_companies`) and loaded by the pipeline at startup. No market cap ceiling
+is enforced in code — files are pre-filtered at source (e.g. via LSEG screener)
+before being committed to `docs/`.
 
 **Source files (committed to git):**
 - `docs/AIM_data_complete_*.csv`
 - `docs/FTSE_AllShare_complete_*.csv`
 
-**To refresh the universe** (e.g. after downloading updated CSV exports from LSEG):
+**To refresh the universe — two paths:**
+
+**Path A — Backend script** (full replace of Firestore universe; takes ~8–9 min):
 1. Replace the CSV files in `docs/`
 2. Commit and deploy to VM (`git pull`)
-3. On the VM, run: `python backend/import_universe_csv.py`
-   — Takes ~8–9 minutes (Companies House API rate limit of 0.6s/request)
+3. On the VM: `python backend/import_universe_csv.py`
 4. Verify: `python backend/pipeline.py` should report the updated company count
+
+**Path B — UI import** (delta only; no VM CLI required):
+1. Open Streamlit app → Universe tab → `📂 Import from file`
+2. Upload a CSV with columns: `Exchange, Code, Name, Market Cap` (market cap in £M)
+3. Review the computed delta: how many new, updated, absent
+4. For absent companies, optionally set Mute or Remove per-row (default: leave unchanged)
+5. Click **Commit import** — a `universe_bulk_import` job is submitted to the VM
+6. job_runner processes: removes → mutes → updates (merge=True) → new CH lookups
+   (~0.6s per new company for CH lookup)
+
+Path B is delta-based — manually added companies not in the file are preserved.
+Path A uses `save_universe()` which is destructive (full collection replace).
 
 **Universe visibility:** the sidebar Universe Lookup panel in the Streamlit app lets
 you query any ticker for membership status, CH confidence score, CH number, signal
@@ -227,7 +241,9 @@ pipeline.
 **Pre-filter stages (Ingest tab):**
 1. Source filter — non-RNS rows discarded
 2. Universe filter — non-universe rows routed to Discovery queue
-3. Type filter — excluded announcement types suppressed (see 5.4 below)
+3. Company name filter — rows matching trust/fund keywords suppressed (Firestore-managed)
+4. Muted ticker filter — rows for muted companies suppressed
+5. Type filter — excluded announcement types suppressed (see 5.4 below)
 
 ---
 
@@ -265,7 +281,7 @@ test runs). The Firestore list is the production source of truth.
 4. **Ingest tab:** upload Excel — review filtered results
 5. For announcements of interest: click URL → read on LSEG → paste body → Submit
 6. **Signals tab:** review LLM analysis; dismiss reviewed items to archive them
-7. **Discovery Queue tab:** review universe admission candidates; admit via `import_universe_csv.py`
+7. **Discovery Queue tab:** review universe admission candidates; admit via Universe tab manual add, UI file import, or `import_universe_csv.py` on VM
 
 ---
 

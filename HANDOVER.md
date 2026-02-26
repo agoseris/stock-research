@@ -7,14 +7,59 @@
 
 ## Current State
 
-App is at **v2.11**. The pipeline is fully operational end-to-end. The CH autonomous
-pipeline has been fixed (was silently scanning only 6 companies per run). Observability
-improved across pipeline and CH connector. Ingest tab UX polished with emoji buttons.
-Mute now respected by the autonomous pipeline. Dedup source breakdown visible in logs.
+App is at **v2.13**. The pipeline is fully operational end-to-end. Universe management
+now has a full UI path: bulk CSV import via the `📂 Import from file` expander in the
+Universe tab. The £1B market cap ceiling has been removed from all code (was a historical
+workaround for incomplete constituent data; files are now pre-filtered at source).
 
 ---
 
-## What Was Built / Changed This Session (v2.9–v2.11)
+## What Was Built This Session (v2.12–v2.13)
+
+### Universe File Import via UI (v2.13)
+
+New `📂 Import from file` expander in the Universe tab. Provides a delta-based bulk
+import path as an alternative to the backend-only `import_universe_csv.py` script.
+
+**Flow:** upload CSV → compute delta (new / update / absent) → review absent companies
+per-row (Mute / Remove / leave) → Commit writes a `universe_bulk_import` job → VM
+job_runner processes.
+
+**CSV format:** columns `Exchange, Code, Name, Market Cap` (market cap in £M).
+Exchange `AIM` → `AIM`; anything else → `LSE_MAIN`.
+
+**job_runner handler (`_process_universe_bulk_import_job`):**
+- Processing order: Remove → Mute → Update → New (mandatory — prevents flag conflicts)
+- **Remove:** `universe_companies` document deleted; discarded from `_universe_tickers`
+- **Mute:** `not_of_interest: True` with `merge=True`; discarded from `_universe_tickers`
+- **Update:** `merge=True` on Firestore directly — never `save_company()` which uses plain
+  `set()` and would overwrite `not_of_interest`
+- **New:** CH lookup (0.6s rate limit), build `UniverseCompany`, `save_company()`; progress
+  logged every 10 companies
+
+**Key constraint:** `save_universe()` (full-replace, destructive) is NOT used — manually
+added companies not in the file are preserved.
+
+**Session state:** `universe_import_file_key` (counter for widget reset on Cancel),
+`universe_import_cache_key`, `universe_import_delta`, `universe_import_absent_decisions`,
+`universe_import_submitted`.
+
+### £1B Market Cap Ceiling Removed (v2.13)
+
+`MARKET_CAP_CEILING_GBP` constant and the filter block removed from
+`import_universe_csv.py`. No ceiling is enforced anywhere in code. Files are
+pre-filtered at source before being committed to `docs/`. `CLAUDE.md` and the
+Universe tab description updated accordingly.
+
+### Ingest Table — Full Suppression Reason (v2.12)
+
+The Action column in the Ingest unified table was showing only the matched keyword
+in the suppression reason, not the full reason string. Fixed so the complete reason
+(e.g. "Announcement type excluded: 'Annual Report'") is shown.
+
+---
+
+## What Was Built / Changed Previously (v2.9–v2.11)
 
 ### CH Pipeline Fix — Critical (backend)
 
@@ -95,8 +140,6 @@ companies just above £1B are valid manual universe additions.
 ---
 
 ## What Was Built / Changed Previously (v2.4–v2.8)
-
-### Deduplication Fix (backend)
 
 ### Deduplication Fix (backend)
 
@@ -252,61 +295,33 @@ user remembering which day the file was exported.
 
 | Component | Status | Detail |
 |---|---|---|
-| Universe | Live | 847 companies (93 muted), £1B ceiling at import; manual add unrestricted |
+| Universe | Live | 847 companies (93 muted); no market cap ceiling in code; file import via UI or `import_universe_csv.py` |
 | Companies House | Live | 673 companies matched, full scan daily cron at 07:00 UTC, 2-day window |
 | LSEG Excel ingestion | Live (interactive) | Human-triggered via Ingest tab — confirmed working end-to-end |
 | Job runner | Live | Running as systemd service on VM, confirmed processing jobs |
 | Google News / CSE | Parked | See SOBER_ASSESSMENT_v1.md |
 | LLM analysis | Live | Gemini 2.0 Flash, regulatory catalyst lens |
 | Notifications | Live | Telegram |
-| Dashboard | Live | Streamlit Community Cloud — v2.11, five tabs: Signals, Discovery, Universe, Ingest, Config |
+| Dashboard | Live | Streamlit Community Cloud — v2.13, five tabs: Signals, Discovery, Universe, Ingest, Config |
 | Cron schedule | Live | 07:00 UTC daily, logs to `~/pipeline.log` |
 
 ---
 
 ## Next Steps (Prioritised)
 
-### 1. UI Refinement — PRIMARY NEXT TASK
+### 1. UI Refinement
 
 The UI "works" but has not been reviewed systematically against actual usage. The plan
 is to walk through each function in the interface and assess:
 
 - **Signals tab:** card layout, LLM output formatting, dismiss flow, sort order
 - **Discovery Queue tab:** card layout, Recommend Add badge, dismiss flow
-- **Ingest tab:**
-  - Step 1 (upload + parse): table layout, column widths, filter summary metrics
-  - Step 2 (submit for analysis): expander UX, body-paste flow, submission feedback,
-    job status polling
-- **Sidebar:**
-  - Universe Lookup: result display, edge cases (not found, no signals)
-  - Filtration Rules: exclusion list display and edit UX
+- **Ingest tab:** table layout, body-paste flow, job status polling
+- **Sidebar:** Universe Lookup edge cases, Filtration Rules edit UX
 
 No architectural changes required for this phase — it is purely a UX/display pass.
 
-### 2. Trust / Fund Keywords — Make Maintainable via UI (SECONDARY)
-
-Currently `TRUST_COMPANY_KEYWORDS` / `_TRUST_COMPANY_KEYWORDS` are hardcoded in both
-`lseg_excel_provider.py` and `frontend/app.py`. The pattern for making them
-user-editable already exists — the announcement type exclusion list uses the same
-Firestore + sidebar approach.
-
-**Proposed implementation:**
-- Store keywords in Firestore `app_config/lseg_filters` as a new field:
-  `excluded_company_keywords: [...]`
-- Seed from `TRUST_COMPANY_KEYWORDS` constant on first load (same pattern as
-  `excluded_announcement_types`)
-- Load in `frontend/app.py` alongside the existing exclusion list
-- Pass to `_parse_lseg_excel()` as a new parameter; include in parse cache key
-- Add a "Company Name Keywords" section to the sidebar Filtration Rules panel
-  (same × remove + Add input pattern)
-- `LSEGExcelProvider.__init__` accepts optional `trust_keywords: List[str]` parameter
-  (falls back to module constant if not injected)
-- `load_exclusion_list(db)` → extend to also return `excluded_company_keywords`, or
-  add a parallel `load_company_keywords(db)` helper
-
-This is a clean extension of the existing config store pattern. No new abstractions needed.
-
-### 3. Remaining Pinned Items
+### 2. Remaining Pinned Items
 
 | Item | Status |
 |---|---|
@@ -314,6 +329,14 @@ This is a clean extension of the existing config store pattern. No new abstracti
 | Director/Insider buying lens workshop | Requires RNS feed — manual workshop viable now |
 | Historic signal impact analysis | Prerequisite: RNS feed + price data |
 | Step 12: extend config store to LLM params, universe criteria, thesis params | Foundation in place — `app_config` collection established |
+
+### Completed in previous sessions
+
+- Trust/fund company name filter (Filter 2.5) — Firestore-managed keywords ✓
+- Universe file import via UI ✓
+- CH pipeline scan fix (was silently scanning only ~6 companies) ✓
+- Mute respected by autonomous pipeline ✓
+- Dedup key alignment (URL-first) ✓
 
 ---
 
@@ -446,37 +469,62 @@ crontab -l
 
 ## Pending Jobs Document Structure
 
-Written by `frontend/app.py` `submit_job()`:
-
+Three job types are handled by `job_runner.py`. All share base fields:
 ```
-{
-  "status": "pending" | "processing" | "complete" | "failed",
-  "submitted_at": SERVER_TIMESTAMP,
-  "claimed_at": ISO string (set by job runner),
-  "processed_at": ISO string (set on completion),
-  "ticker": str,
-  "company_name": str,
-  "headline": str,
-  "body": str,
-  "source_url": str,
-  "published_at": datetime,
-  "price": float | None,
-  "price_change": str | None,
-  "note": str | None (e.g. "deduplicated", "no_result"),
-  "error": str | None (set on failure)
-}
+"status": "pending" | "processing" | "complete" | "failed"
+"submitted_at": SERVER_TIMESTAMP
+"claimed_at": ISO string (set by job runner)
+"processed_at": ISO string (set on completion)
+"note": str | None (e.g. "deduplicated", "admitted: CH=matched")
+"error": str | None (set on failure)
+```
+
+**`lseg_ingest`** — written by `submit_job()` in Ingest tab:
+```
+"job_type": "lseg_ingest"
+"ticker", "company_name", "headline", "body", "source_url", "published_at"
+"price": float | None, "price_change": str | None
+```
+
+**`universe_admit`** — written by `submit_universe_admit_job()` in Universe/Discovery tabs:
+```
+"job_type": "universe_admit"
+"ticker", "company_name", "market_cap_gbp", "listing_exchange"
+"not_of_interest": bool, "source_discovery_id": str | None
+```
+
+**`universe_bulk_import`** — written by `submit_universe_bulk_import_job()` in Universe tab:
+```
+"job_type": "universe_bulk_import"
+"new_companies":    [{ticker, company_name, market_cap_gbp, listing_exchange, tier}, ...]
+"update_companies": [{ticker, company_name, market_cap_gbp, listing_exchange, tier}, ...]
+"remove_tickers":   [str, ...]
+"mute_tickers":     [str, ...]
 ```
 
 ---
 
 ## Universe Management
 
-To refresh the universe with updated CSV files:
+Two paths for bulk universe refresh:
 
+**Path A — Backend script (full replace, takes ~8–9 min):**
 1. Replace `docs/AIM_data_complete_*.csv` and/or `docs/FTSE_AllShare_complete_*.csv`
 2. Commit to git and deploy to VM (`git pull`)
-3. Run `python import_universe_csv.py` — takes ~8–9 minutes (CH API rate limit)
+3. On VM: `python import_universe_csv.py`
 4. Verify: `python pipeline.py` should report updated company count
+
+**Path B — UI import (delta only, no VM CLI required):**
+1. Open Universe tab → `📂 Import from file`
+2. Upload a CSV with columns: `Exchange, Code, Name, Market Cap` (market cap in £M)
+3. Review the computed delta (new / update / absent)
+4. For absent companies: optionally set Mute or Remove per-row (default is leave)
+5. Click **Commit import** — job submitted to VM job_runner
+6. Job_runner processes: removes → mutes → updates (merge=True) → new CH lookups
+   Progress visible in Job Status section of Ingest tab
+
+Note: Path B is delta-based — manually added companies not in the file are preserved.
+Path A is destructive (full replace via `save_universe()`).
 
 ---
 

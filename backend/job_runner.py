@@ -315,6 +315,114 @@ REASON: [one sentence]"""
             self._fail_job(job_id, str(e))
 
     # ------------------------------------------------------------------
+    # Bulk universe import
+    # ------------------------------------------------------------------
+
+    def _process_universe_bulk_import_job(self, job_id: str, job: dict):
+        """
+        Handle a universe_bulk_import job.
+
+        Processing order:
+          1. Remove  — delete universe_companies documents
+          2. Mute    — set not_of_interest=True with merge=True
+          3. Update  — update company fields with merge=True (preserves not_of_interest)
+          4. New     — CH lookup (0.6s rate limit) + save_company() for each new entry
+
+        job fields:
+          new_companies    — list of {ticker, company_name, market_cap_gbp, listing_exchange, tier}
+          update_companies — same shape; metadata update only, flags preserved
+          remove_tickers   — list of ticker strings to delete from Firestore
+          mute_tickers     — list of ticker strings to set not_of_interest=True
+        """
+        remove_tickers = job.get("remove_tickers", [])
+        mute_tickers = job.get("mute_tickers", [])
+        update_companies = job.get("update_companies", [])
+        new_companies = job.get("new_companies", [])
+
+        print(f"\n[{_ts()}] --- universe_bulk_import {job_id[:8]} ---")
+        print(f"  new={len(new_companies)}, update={len(update_companies)}, "
+              f"remove={len(remove_tickers)}, mute={len(mute_tickers)}")
+
+        try:
+            now = datetime.now(timezone.utc)
+
+            # 1. Remove
+            for ticker in remove_tickers:
+                ticker = ticker.strip().upper()
+                self.db.collection("universe_companies").document(ticker).delete()
+                self._universe_tickers.discard(ticker)
+                print(f"  [{ticker}] Removed.")
+
+            # 2. Mute
+            for ticker in mute_tickers:
+                ticker = ticker.strip().upper()
+                self.db.collection("universe_companies").document(ticker).set(
+                    {"not_of_interest": True}, merge=True
+                )
+                self._universe_tickers.discard(ticker)
+                print(f"  [{ticker}] Muted.")
+
+            # 3. Update — merge=True is critical: preserves not_of_interest flag
+            for comp in update_companies:
+                ticker = (comp.get("ticker") or "").strip().upper()
+                if not ticker:
+                    continue
+                self.db.collection("universe_companies").document(ticker).set(
+                    {
+                        "company_name": comp.get("company_name", ""),
+                        "market_cap_gbp": comp.get("market_cap_gbp"),
+                        "listing_exchange": comp.get("listing_exchange", ""),
+                        "tier": comp.get("tier", 2),
+                        "last_refreshed": now,
+                    },
+                    merge=True,
+                )
+            if update_companies:
+                print(f"  Updated {len(update_companies)} companies.")
+
+            # 4. New — CH lookup + save_company()
+            api_key = os.environ.get("COMPANIES_HOUSE_KEY", "")
+            for i, comp in enumerate(new_companies, 1):
+                ticker = (comp.get("ticker") or "").strip().upper()
+                company_name = comp.get("company_name", "")
+                if not ticker or not company_name:
+                    continue
+                ch_number, ch_confidence = None, 0.0
+                if api_key:
+                    ch_number, ch_confidence = _lookup_ch_number(company_name, api_key)
+                    time.sleep(0.6)  # CH rate limit
+                listing_exchange = comp.get("listing_exchange", "AIM")
+                company = UniverseCompany(
+                    ticker_lse=ticker,
+                    ticker_yahoo=f"{ticker}.L",
+                    company_name=company_name,
+                    tier=comp.get("tier", 2),
+                    listing_exchange=listing_exchange,
+                    entity_type="OPERATING",
+                    liquidity_flag="LIQUID" if listing_exchange == "LSE_MAIN" else "ILLIQUID",
+                    universe_added_date=now.date(),
+                    last_refreshed=now,
+                    market_cap_gbp=comp.get("market_cap_gbp"),
+                    companies_house_number=ch_number,
+                    companies_house_confidence=ch_confidence if ch_number else None,
+                )
+                self.universe_storage.save_company(company)
+                self._universe_tickers.add(ticker)
+                if i % 10 == 0 or i == len(new_companies):
+                    print(f"  New: {i}/{len(new_companies)} added.")
+
+            note = (f"bulk_import: {len(new_companies)} added, "
+                    f"{len(update_companies)} updated, "
+                    f"{len(remove_tickers)} removed, "
+                    f"{len(mute_tickers)} muted")
+            self._complete_job(job_id, note=note)
+            print(f"  [{_ts()}] bulk_import complete: {note}")
+
+        except Exception as e:
+            print(f"  universe_bulk_import failed: {e}")
+            self._fail_job(job_id, str(e))
+
+    # ------------------------------------------------------------------
     # Job processing
     # ------------------------------------------------------------------
 
@@ -339,6 +447,9 @@ REASON: [one sentence]"""
         job_type = job.get("job_type", "lseg_ingest")
         if job_type == "universe_admit":
             self._process_universe_admit_job(job_id, job)
+            return
+        if job_type == "universe_bulk_import":
+            self._process_universe_bulk_import_job(job_id, job)
             return
 
         ticker = job.get("ticker", "UNKNOWN")

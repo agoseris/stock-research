@@ -217,8 +217,9 @@ the autonomous cron pipeline.
   source of truth. Committed to git for version history.
 - `import_universe_csv.py` imports CSVs → runs CH lookup → writes to Firestore.
   Re-run whenever CSVs are updated. Takes ~8–9 minutes (CH API rate limit).
-- £1B market cap ceiling applied at import. 845 companies currently admitted
-  (547 AIM + 298 FTSE). 244 large-caps excluded.
+- No market cap ceiling enforced in code — file is pre-filtered at source
+  (e.g. via LSEG screener) before being committed to docs/. 845 companies
+  currently admitted (547 AIM + 298 FTSE).
 - `pipeline.py` reads the universe from Firestore at startup. **Raises RuntimeError
   if Firestore is empty** — there is no fallback to `universe.py`. Run
   `import_universe_csv.py` before the first pipeline run.
