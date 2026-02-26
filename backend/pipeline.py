@@ -195,10 +195,15 @@ REASON: [one sentence]"""
         signal_queue: List[Announcement] = []
         discovery_queue: List[Announcement] = []
         deduplicated = 0
+        dupe_by_source: dict = {}
 
         for announcement in all_announcements:
-            if self.storage.headline_exists(announcement.headline):
+            existing_source = self.storage.get_existing_source(
+                announcement.source_url, announcement.headline
+            )
+            if existing_source is not None:
                 deduplicated += 1
+                dupe_by_source[existing_source] = dupe_by_source.get(existing_source, 0) + 1
                 continue
             self.storage.save_announcement(announcement)
             if self._is_in_universe(announcement):
@@ -207,6 +212,8 @@ REASON: [one sentence]"""
                 discovery_queue.append(announcement)
 
         print(f"Deduplicated (seen in previous runs): {deduplicated}")
+        for src, count in sorted(dupe_by_source.items(), key=lambda x: -x[1]):
+            print(f"  - {src}: {count}")
         print(f"Signal queue (in universe): {len(signal_queue)}")
         print(f"Discovery queue (not in universe): {len(discovery_queue)}")
 

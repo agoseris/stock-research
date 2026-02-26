@@ -166,6 +166,13 @@ making it immediately obvious whether a deploy has taken effect.
 6. **Liquidity transparency:** every universe member carries a liquidity flag.
    Signals on illiquid stocks are surfaced, not suppressed. The human decides.
 
+7. **Observability:** every pipeline run must be self-explanatory from its log alone.
+   Log what was ingested and from which source, what was new vs. duplicate and why
+   (including which prior source caused the duplicate), what passed or failed each
+   pre-filter and why, and what was analysed and resulted. Progress markers on long
+   scans (e.g. every 100 companies). Use structured `print` statements during the
+   build phase; upgrade to the `logging` module when the pipeline stabilises.
+
 ---
 
 ## Known Gotchas

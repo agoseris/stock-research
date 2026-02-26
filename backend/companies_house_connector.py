@@ -91,9 +91,13 @@ class CompaniesHouseProvider(AnnouncementProviderBase):
         print(f"Monitoring {len(verified)} companies with Companies House numbers "
               f"(out of {len(universe_companies)} in universe)")
 
-        for ticker, (company_number, ch_confidence, company_name) in verified.items():
+        companies_with_filings = 0
+        for i, (ticker, (company_number, ch_confidence, company_name)) in enumerate(verified.items()):
+            if (i + 1) % 100 == 0:
+                print(f"  CH scan progress: {i+1}/{len(verified)} companies...")
             time.sleep(self.REQUEST_SLEEP)
             filings = self.get_filings(company_number, max_results=5)
+            count_before = len(announcements)
             for filing in filings:
                 date_str = filing.get("date", "")
                 try:
@@ -128,6 +132,13 @@ class CompaniesHouseProvider(AnnouncementProviderBase):
                 )
                 announcements.append(announcement)
 
+            new_count = len(announcements) - count_before
+            if new_count > 0:
+                companies_with_filings += 1
+                print(f"  [{ticker}] {company_name}: {new_count} new filing(s) in 2-day window")
+
+        print(f"CH scan complete: {len(verified)} companies checked, "
+              f"{companies_with_filings} had new filings")
         return announcements
 
 

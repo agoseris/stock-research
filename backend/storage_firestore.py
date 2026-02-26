@@ -15,7 +15,7 @@ crashes the pipeline. Errors are logged to stdout.
 import hashlib
 import os
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from google.cloud import firestore
@@ -112,6 +112,25 @@ class FirestoreProvider(StorageProviderBase):
         except Exception as e:
             print(f"  [Firestore] headline_exists failed: {e}")
             return False
+
+    def get_existing_source(self, source_url: str, headline: str = "") -> Optional[str]:
+        """
+        Check the deduplication store using the same key as save_announcement
+        (source_url if present, else headline). Returns the source_name of the
+        original record if found, or None if this announcement is new.
+        Use this in preference to headline_exists() — it uses the correct key
+        and provides the origin source for observability logging.
+        """
+        try:
+            key_text = source_url if source_url else headline
+            fp = self._fingerprint(key_text)
+            doc = self.db.collection(self.ANNOUNCEMENTS_COLLECTION).document(fp).get()
+            if doc.exists:
+                return doc.to_dict().get("source_name", "unknown")
+            return None
+        except Exception as e:
+            print(f"  [Firestore] get_existing_source failed: {e}")
+            return None
 
     # --- Signal results ---
 
