@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.8"
+VERSION = "2.9"
 
 
 
@@ -1176,7 +1176,7 @@ with tab_ingest:
             hdr = st.columns([1.2, 1, 2.5, 2, 1, 0.8, 1, 1, 0.6, 0.6, 0.6, 1.8])
             for col, label in zip(hdr, [
                 "Outcome", "Ticker", "Company", "Type", "Date", "Time",
-                "Price(p)", "Chg%", "URL", "Dismiss", "Mute", "Action",
+                "Price(p)", "Chg%", "URL", "Hide", "Mute", "Action",
             ]):
                 col.caption(f"**{label}**")
             st.markdown(
@@ -1237,13 +1237,13 @@ with tab_ingest:
                 c_url.caption("—")
 
             # Dismiss button (all rows)
-            if c_dismiss.button("✕", key=f"dismiss_{i}", help="Dismiss this row"):
+            if c_dismiss.button("👎", key=f"dismiss_{i}", help="Dismiss this row"):
                 st.session_state["ingest_dismissed"].add(row_uid)
                 st.rerun()
 
             # Mute button (non-muted rows only)
             if not is_muted:
-                if c_mute.button("Mute", key=f"mute_{i}", help="Mute this ticker permanently"):
+                if c_mute.button("🔇", key=f"mute_{i}", help="Mute this ticker permanently"):
                     mark_not_of_interest(db, row["ticker"], True)
                     st.session_state["ingest_session_muted"].add(row["ticker"].upper())
                     st.rerun()
@@ -1297,14 +1297,14 @@ with tab_ingest:
                 row_key_admit = f"admit_{i}"
                 col_a, col_b = c_action.columns(2)
 
-                if col_a.button("+ Univ", key=f"admit_btn_{i}", help="Add to Universe"):
+                if col_a.button("⏫", key=f"admit_btn_{i}", help="Add to Universe"):
                     if st.session_state.get(subform_key) == row_key_admit:
                         st.session_state.pop(subform_key, None)
                     else:
                         st.session_state[subform_key] = row_key_admit
                     st.rerun()
 
-                if col_b.button("→ Pass", key=f"promote_btn_{i}", help="Promote to Passed"):
+                if col_b.button("✅", key=f"promote_btn_{i}", help="Promote to Passed"):
                     # _row_id is "d_{idx}" — use idx to splice the exact element out
                     disc_idx = int(row["_row_id"].split("_", 1)[1])
                     disc_list = st.session_state["ingest_result"]["discovery"]
