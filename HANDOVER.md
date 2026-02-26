@@ -1,5 +1,5 @@
 # Session Handover
-**Date:** 25 February 2026
+**Date:** 26 February 2026
 **Branch:** `master`
 **Last commit:** (see git log)
 
@@ -7,13 +7,96 @@
 
 ## Current State
 
-App is at **v2.8**. The pipeline is fully operational end-to-end. The Ingest tab has
-been overhauled with a unified announcement table and the deduplication system has been
-fixed to use URL-based fingerprinting. Post-launch bugs fixed and UX polished.
+App is at **v2.11**. The pipeline is fully operational end-to-end. The CH autonomous
+pipeline has been fixed (was silently scanning only 6 companies per run). Observability
+improved across pipeline and CH connector. Ingest tab UX polished with emoji buttons.
+Mute now respected by the autonomous pipeline. Dedup source breakdown visible in logs.
 
 ---
 
-## What Was Built / Changed This Session (v2.4–v2.7)
+## What Was Built / Changed This Session (v2.9–v2.11)
+
+### CH Pipeline Fix — Critical (backend)
+
+**Root cause:** `pipeline.run(max_announcements=30)` caused `get_recent_announcements()`
+to return early after 30 total filings — always the same first ~6 companies
+alphabetically (4BB, 80M, AAS, AAU…). The 90-day cutoff meant those same filings
+were re-ingested and deduplicated every day. The pipeline appeared to work but was
+completely blind to 665+ companies.
+
+**Fix (`companies_house_connector.py`):**
+- Cutoff changed from 90 days → 2 days (only new filings per run)
+- Early-exit `if len(announcements) >= max_results: return` removed — all 672 companies
+  now scanned each run
+- Default `max_results` raised to 500 (defensive ceiling only)
+
+**Fix (`pipeline.py`):**
+- `max_announcements=30` → 500
+
+**Confirmed working:** 673 companies scanned, 43 had new filings, 79 ingested, 6 in
+signal queue, 1 passed pre-filter, LLM analysis ran successfully.
+
+### Observability Improvements (backend + CLAUDE.md)
+
+**`storage_firestore.py`:** Added `get_existing_source(source_url, headline)` — returns
+`source_name` of the original dedup record, or None if new. Uses same URL-first key as
+`save_announcement()`, fixing a key misalignment where `headline_exists()` (headline key)
+and `save_announcement()` (URL key) used different fingerprints.
+
+**`pipeline.py`:** Replaced `headline_exists()` with `get_existing_source()`. Dedup
+loop now tracks dupes by originating source. Log output:
+```
+Deduplicated (seen in previous runs): 70
+  - Companies House: 70
+```
+
+**`companies_house_connector.py`:** Added scan progress marker every 100 companies,
+per-company log line for companies with new filings, and scan-complete summary:
+```
+CH scan complete: 673 companies checked, 43 had new filings
+```
+
+**`CLAUDE.md`:** Added Principle 7 — Observability.
+
+### Mute Respected by Autonomous Pipeline (backend)
+
+`_load_universe()` in `pipeline.py` previously loaded all universe companies including
+muted ones (the `not_of_interest` flag was read but silently dropped). Muted companies
+were routing to the signal queue and could trigger LLM analysis and Telegram alerts.
+
+**Fix:** one-line filter in `_load_universe()`:
+```python
+if not c.not_of_interest
+```
+Muted count is now logged at startup:
+```
+Universe loaded from Firestore: 754 companies (93 muted, excluded from pipeline).
+```
+
+Note: 93 muted out of 847 is worth reviewing in the Universe tab — may include bulk
+mutes from trust/fund filter or other historical actions.
+
+### Ingest Tab — Emoji Buttons (v2.9)
+
+| Old label | New label | Column header |
+|---|---|---|
+| `✕` (dismiss) | `👎` | "Dismiss" → "Hide" |
+| `Mute` | `🔇` | "Mute" (unchanged) |
+| `+ Univ` | `⏫` | "Action" (unchanged) |
+| `→ Pass` | `✅` | "Action" (unchanged) |
+| `Submit ▾` | `Analyse ▾` | opens body sub-form |
+
+### Market Cap Ceiling Removed (v2.10)
+
+`st.number_input` for market cap in both the Ingest tab discovery admission form and
+the Universe tab manual add form had `max_value=1000.0` (£1B). Removed — AIM/SMX
+companies just above £1B are valid manual universe additions.
+
+---
+
+## What Was Built / Changed Previously (v2.4–v2.8)
+
+### Deduplication Fix (backend)
 
 ### Deduplication Fix (backend)
 
@@ -169,16 +252,15 @@ user remembering which day the file was exported.
 
 | Component | Status | Detail |
 |---|---|---|
-| Universe | Live | 845 companies (547 AIM + 298 FTSE), £1B ceiling |
-| Companies House | Live | 671 companies matched, daily cron at 07:00 UTC |
-| LSEG Excel ingestion | Live (interactive) | Human-triggered via Ingest tab — confirmed working |
+| Universe | Live | 847 companies (93 muted), £1B ceiling at import; manual add unrestricted |
+| Companies House | Live | 673 companies matched, full scan daily cron at 07:00 UTC, 2-day window |
+| LSEG Excel ingestion | Live (interactive) | Human-triggered via Ingest tab — confirmed working end-to-end |
 | Job runner | Live | Running as systemd service on VM, confirmed processing jobs |
 | Google News / CSE | Parked | See SOBER_ASSESSMENT_v1.md |
 | LLM analysis | Live | Gemini 2.0 Flash, regulatory catalyst lens |
 | Notifications | Live | Telegram |
-| Dashboard | Live | Streamlit Community Cloud — three tabs: Signals, Discovery Queue, Ingest |
+| Dashboard | Live | Streamlit Community Cloud — v2.11, five tabs: Signals, Discovery, Universe, Ingest, Config |
 | Cron schedule | Live | 07:00 UTC daily, logs to `~/pipeline.log` |
-| Streamlit Community Cloud | Live | Deployed and confirmed working, v2.1 |
 
 ---
 
