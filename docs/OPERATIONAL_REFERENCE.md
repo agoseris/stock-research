@@ -187,6 +187,11 @@ before being committed to `docs/`.
 Path B is delta-based — manually added companies not in the file are preserved.
 Path A uses `save_universe()` which is destructive (full collection replace).
 
+> **Known performance limitation (Path B):** each Remove or Mute decision in the
+> absent-company review table triggers an individual Streamlit rerun (2–5 seconds).
+> For large absent lists (100+ rows), this is slow. A batch-select solution is planned.
+> Workaround: use Path A for large universe refreshes, Path B for small delta updates.
+
 **Universe visibility:** the sidebar Universe Lookup panel in the Streamlit app lets
 you query any ticker for membership status, CH confidence score, CH number, signal
 count, and most recent signal.
@@ -281,7 +286,14 @@ test runs). The Firestore list is the production source of truth.
 4. **Ingest tab:** upload Excel — review filtered results
 5. For announcements of interest: click URL → read on LSEG → paste body → Submit
 6. **Signals tab:** review LLM analysis; dismiss reviewed items to archive them
-7. **Discovery Queue tab:** review universe admission candidates; admit via Universe tab manual add, UI file import, or `import_universe_csv.py` on VM
+7. **Discovery Queue tab:** generated only when a non-universe company is submitted
+   via Ingest. Assessed as largely redundant in current workflow — the submitter
+   already knows the company. Universe admission is handled directly via the
+   Universe tab (manual add or file import).
+
+> **Note on Mute in Ingest:** the 🔇 Mute button on DISCOVERY rows (non-universe
+> companies) is redundant — there is nothing to mute since the company is not monitored.
+> Avoid using it. It will be removed or repurposed in a future update.
 
 ---
 

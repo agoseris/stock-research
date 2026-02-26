@@ -7,10 +7,19 @@
 
 ## Current State
 
-App is at **v2.13**. The pipeline is fully operational end-to-end. Universe management
-now has a full UI path: bulk CSV import via the `📂 Import from file` expander in the
-Universe tab. The £1B market cap ceiling has been removed from all code (was a historical
-workaround for incomplete constituent data; files are now pre-filtered at source).
+App is at **v2.13**. All five tabs have been exercised against live data:
+
+| Tab | Status | Notes |
+|---|---|---|
+| Signals | Working | UI layout needs improvement — see Next Steps |
+| Discovery | Working | Assessed as **redundant** — see Next Steps |
+| Universe | Working | Both manual add and file import confirmed end-to-end |
+| Ingest | Working | Full workflow confirmed end-to-end |
+| Config | Working | Exclusion list editable; changes reflected in next parse |
+
+Known UX issue: Streamlit re-render latency makes any multi-row operation slow
+(2–5 seconds per action). Affects universe import absent-row review, Ingest muting,
+and Ingest row hiding. See Next Steps for the planned batch-action solution.
 
 ---
 
@@ -302,26 +311,70 @@ user remembering which day the file was exported.
 | Google News / CSE | Parked | See SOBER_ASSESSMENT_v1.md |
 | LLM analysis | Live | Gemini 2.0 Flash, regulatory catalyst lens |
 | Notifications | Live | Telegram |
-| Dashboard | Live | Streamlit Community Cloud — v2.13, five tabs: Signals, Discovery, Universe, Ingest, Config |
+| Dashboard | Live | Streamlit Community Cloud — v2.13, five tabs: Signals (working, layout TBD), Discovery (working, assessed redundant), Universe (working), Ingest (working), Config (working) |
 | Cron schedule | Live | 07:00 UTC daily, logs to `~/pipeline.log` |
 
 ---
 
 ## Next Steps (Prioritised)
 
-### 1. UI Refinement
+### 1. Batch-action UX for multi-row operations — PRIORITY
 
-The UI "works" but has not been reviewed systematically against actual usage. The plan
-is to walk through each function in the interface and assess:
+Streamlit's per-button re-render causes 2–5 second latency between row actions.
+This makes any workflow requiring sequential decisions across many rows painful in
+practice — specifically:
+- Universe import: reviewing 100 absent-row decisions (Remove / leave)
+- Ingest: muting multiple tickers one at a time
+- Ingest: hiding multiple rows one at a time
 
-- **Signals tab:** card layout, LLM output formatting, dismiss flow, sort order
-- **Discovery Queue tab:** card layout, Recommend Add badge, dismiss flow
-- **Ingest tab:** table layout, body-paste flow, job status polling
-- **Sidebar:** Universe Lookup edge cases, Filtration Rules edit UX
+**Proposed solution:** replace per-row immediate actions with a selection + batch-commit
+pattern:
+- Rows get a checkbox (or similar) for multi-select
+- A toolbar above the table offers batch actions: "Remove selected", "Mute selected",
+  "Hide selected"
+- All selected mutations are written in a single Firestore/session-state operation,
+  triggering one rerun instead of N
+- Only **"Analyse ▾"** retains its current immediate per-row behaviour (body paste is
+  inherently individual)
 
-No architectural changes required for this phase — it is purely a UX/display pass.
+This applies to: Ingest unified table (hide, mute), Universe import absent-row table
+(remove, mute).
 
-### 2. Remaining Pinned Items
+### 2. Signals tab — UI layout improvement
+
+Signals tab is functional but the card layout has not been reviewed against real usage.
+Specific areas to assess and improve:
+- Information density and ordering within each card
+- Whether the full-analysis expander is the right pattern or whether key fields should
+  surface inline
+- Dismiss flow and sort order
+
+### 3. Discovery tab — assess and remove or repurpose
+
+The Discovery tab appears completely redundant in practice:
+- Discovery results are only generated when a non-universe company is submitted via
+  the Ingest tab — a deliberate manual act
+- The submitter already knows the company; the LLM "recommend add?" assessment adds
+  little value over the human's own judgement
+- The tab creates noise without adding signal
+
+**Options to consider:**
+- Remove the tab entirely; suppress discovery-queue routing in the job_runner
+- Repurpose: if a genuine unknown company surfaces (e.g. from a future automated
+  news source), the lightweight assessment may be useful — but that use case doesn't
+  exist yet
+- Decision deferred — record and revisit when RNS direct feed is in scope
+
+### 4. Universe tab — Mute on non-universe ticker is redundant
+
+In the Ingest tab, the 🔇 Mute button is available on DISCOVERY rows (companies not
+in the universe). Muting a ticker that isn't monitored does nothing useful — there
+are no signals to suppress, and it won't affect the Ingest filter for that ticker
+since the non-universe route was already taken. The button should be removed from
+DISCOVERY rows, or replaced with a different action (e.g. "Block from discovery" if
+that concept is ever formalised).
+
+### 5. Remaining Pinned Items
 
 | Item | Status |
 |---|---|
@@ -330,13 +383,14 @@ No architectural changes required for this phase — it is purely a UX/display p
 | Historic signal impact analysis | Prerequisite: RNS feed + price data |
 | Step 12: extend config store to LLM params, universe criteria, thesis params | Foundation in place — `app_config` collection established |
 
-### Completed in previous sessions
+### Completed
 
 - Trust/fund company name filter (Filter 2.5) — Firestore-managed keywords ✓
 - Universe file import via UI ✓
 - CH pipeline scan fix (was silently scanning only ~6 companies) ✓
 - Mute respected by autonomous pipeline ✓
 - Dedup key alignment (URL-first) ✓
+- All five tabs confirmed working against live data ✓
 
 ---
 
