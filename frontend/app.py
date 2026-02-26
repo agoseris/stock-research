@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.11"
+VERSION = "2.12"
 
 
 
@@ -1336,7 +1336,7 @@ with tab_ingest:
             else:
                 # Muted or suppressed — show reason on hover via help
                 if row.get("reason"):
-                    c_action.caption(f"ℹ {row['reason'][:30]}")
+                    c_action.caption(f"ℹ {row['reason']}")
 
         if not rows:
             st.markdown(
