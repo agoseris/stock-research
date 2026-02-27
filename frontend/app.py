@@ -21,9 +21,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.13"
+VERSION = "2.14"
 
-
+# UI emoji constants
+EMOJI_MUTE = "🔇"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -1091,8 +1092,8 @@ with tab_universe:
             c_mut.caption("●" if is_muted else "")
             c_added.caption(added_str)
 
-            mute_label = "Unmute" if is_muted else "Mute"
-            if c_action.button(mute_label, key=f"universe_mute_{ticker}_{idx}"):
+            mute_help = "Unmute from signal pipeline" if is_muted else "Mute from signal pipeline"
+            if c_action.button(EMOJI_MUTE, key=f"universe_mute_{ticker}_{idx}", help=mute_help):
                 mark_not_of_interest(db, ticker, not is_muted)
                 st.rerun()
     else:
@@ -1218,11 +1219,11 @@ with tab_universe:
                             st.session_state["universe_import_absent_decisions"] = dict(_decisions)
                             st.rerun()
                     else:
-                        if _rf1.button("Mute", key=f"uimport_mute_{_aticker}"):
+                        if _rf1.button(EMOJI_MUTE, key=f"uimport_mute_{_aticker}", help="Mute from signal pipeline"):
                             _decisions[_aticker] = "mute"
                             st.session_state["universe_import_absent_decisions"] = dict(_decisions)
                             st.rerun()
-                        if _rf2.button("Remove", key=f"uimport_remove_{_aticker}"):
+                        if _rf2.button("🗑️", key=f"uimport_remove_{_aticker}", help="Remove from universe"):
                             _decisions[_aticker] = "remove"
                             st.session_state["universe_import_absent_decisions"] = dict(_decisions)
                             st.rerun()
