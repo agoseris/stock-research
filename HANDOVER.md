@@ -7,14 +7,14 @@
 
 ## Current State
 
-App is at **v2.15**. Running locally on WSL2 at `http://localhost:8501`.
+App is at **v2.18**. Running locally on WSL2 at `http://localhost:8501`.
 
 | Tab | Status | Notes |
 |---|---|---|
 | Signals | Working | UI layout not yet reviewed against real usage |
 | Discovery | Working | Assessed as **redundant** — see Next Steps |
 | Universe | Working | Both manual add and file import confirmed end-to-end |
-| Ingest | Working | Full workflow confirmed end-to-end. Feature complete. |
+| Ingest | Working | Full workflow confirmed end-to-end. Auto-fetch & submit live. |
 | Config | Working | Exclusion list editable; changes reflected in next parse |
 
 **Local hosting active:** `./start_frontend.sh` from project root starts Streamlit nohup
@@ -24,6 +24,47 @@ Community Cloud deployment archived (no longer primary).
 Known UX issue: Streamlit re-render latency makes any multi-row operation slow
 (2–5 seconds per action). Affects universe import absent-row review, Ingest muting,
 and Ingest row hiding. Batch-action solution planned but deprioritised.
+
+---
+
+## What Was Built This Session (v2.16–v2.18)
+
+### Playwright Auto-Fetch & Submit (v2.16–v2.18)
+
+Phase 1 item 3 complete: headless browser body retrieval is live.
+
+**`frontend/lseg_scraper.py`** (new module):
+- Playwright (sync API) scraper for LSEG announcement body text
+- Persistent cookie store at `frontend/lseg_cookies.json` (gitignored) — survives
+  the LSEG private investor challenge gate between sessions
+- Challenge gate handling: detects `body.block-scroll`, auto-clicks "a private investor",
+  waits for gate to clear, saves cookies — fully transparent to the user
+- Body extraction via JavaScript evaluation of shadow DOM:
+  `div[itemprop="articleBody"]` → shadow root → `div.news-body-content`
+- Graceful degradation: if `playwright` is not importable, `_PLAYWRIGHT_AVAILABLE` flag
+  falls back to manual paste UI in the Ingest tab
+- All failure modes raise `RuntimeError` with a descriptive message
+
+**`frontend/app.py`** changes:
+- v2.16: Added `🔍 Auto-fetch & submit` button in the Analyse sub-form.
+  On success: fetches body, calls `submit_job`, closes sub-form, reruns.
+  On failure: stores error in session state so it survives `st.rerun()` and displays
+  persistently below the button.
+- v2.17: Fixed error persistence bug — original code called `st.rerun()` outside the
+  try/except block, wiping `st.error()` before Streamlit could render it.
+- v2.18: Combined fetch + submit into a single button ("Auto-fetch & submit").
+  Previously required three clicks: Analyse ▾ → Auto-fetch body → Submit for analysis.
+  Now requires two: Analyse ▾ → Auto-fetch & submit.
+
+**System dependency:** Playwright requires system libraries not shipped with the Python
+package. One-time install in the frontend venv:
+```bash
+source frontend/venv/bin/activate
+playwright install-deps chromium
+```
+This has been run on the current WSL2 environment and is working.
+
+**`frontend/requirements.txt`:** `playwright` added.
 
 ---
 
@@ -340,7 +381,7 @@ user remembering which day the file was exported.
 | Google News / CSE | Parked | See SOBER_ASSESSMENT_v1.md |
 | LLM analysis | Live | Gemini 2.0 Flash, regulatory catalyst lens |
 | Notifications | Live | Telegram |
-| Dashboard | Live | Local hosting (WSL2, port 8501) — v2.15, five tabs all working |
+| Dashboard | Live | Local hosting (WSL2, port 8501) — v2.18, five tabs all working |
 | Cron schedule | Live | 07:00 UTC daily, logs to `~/pipeline.log` |
 
 ---
@@ -349,10 +390,8 @@ user remembering which day the file was exported.
 
 ### Phase 1 — Reduce manual toil
 
-1. **Headless browser body retrieval** — automate the "Analyse" body-paste step.
-   Playwright fetches LSEG announcement body when user clicks Analyse. Local hosting
-   is now in place; Playwright can be added to `frontend/requirements.txt` and called
-   directly from `app.py`.
+1. ~~**Headless browser body retrieval**~~ ✓ Complete (v2.16–v2.18) — "Auto-fetch & submit"
+   button in the Analyse sub-form. Playwright fetches body and auto-submits on success.
 
 2. **Headless browser index page scraping** — automate the "Fetch" Excel-upload step.
    Playwright scrapes the LSEG news explorer table. Replaces the manual Export → Upload
@@ -397,6 +436,8 @@ user remembering which day the file was exported.
 - Exclusion list expanded — results, gearing, presentations, dividends added ✓
 - Transaction in Own Shares moved to excluded ✓
 - Lens workshop — 5 candidates documented, state model designed ✓
+- Playwright auto-fetch & submit (v2.16–v2.18) — `frontend/lseg_scraper.py` + button ✓
+- Error persistence fix — fetch errors survive `st.rerun()` via session state ✓
 
 ### Previously Completed
 

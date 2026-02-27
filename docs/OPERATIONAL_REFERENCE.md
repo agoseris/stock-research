@@ -1,6 +1,6 @@
 # Operational Reference — Stock Research System
 
-*Last updated: 27 February 2026 · App version: 2.15*
+*Last updated: 27 February 2026 · App version: 2.18*
 
 ---
 
@@ -97,6 +97,16 @@ echo "Deployment complete."
 | Start | `./start_frontend.sh` from project root — nohup, PID saved to `streamlit.pid` |
 | Stop | `./stop_frontend.sh` from project root |
 | Logs | `logs/streamlit.log` |
+
+**Playwright system dependencies** (one-time setup, already done on current WSL2):
+```bash
+source frontend/venv/bin/activate
+playwright install-deps chromium
+```
+Required for the "Auto-fetch & submit" button in the Ingest tab. If the system libraries
+are missing, Chromium launches but immediately exits with `libnspr4.so: cannot open shared
+object file`. The app degrades gracefully — the button is hidden if Playwright cannot be
+imported, but once `install-deps` has been run the button is available on next restart.
 
 ### Streamlit Community Cloud (archived — no longer primary)
 | Item | Value |
@@ -299,7 +309,8 @@ test runs). The Firestore list is the production source of truth.
 2. Navigate to LSEG daily URL (Section 4)
 3. Export to Excel (Download button, top right of news explorer)
 4. **Ingest tab:** upload Excel — review filtered results
-5. For announcements of interest: click URL → read on LSEG → paste body → Submit
+5. For announcements of interest: click **Analyse ▾** → **🔍 Auto-fetch & submit**
+   (Playwright fetches body and auto-submits). Manual paste still available if needed.
 6. **Signals tab:** review LLM analysis; dismiss reviewed items to archive them
 7. **Discovery Queue tab:** generated only when a non-universe company is submitted
    via Ingest. Assessed as largely redundant in current workflow — the submitter
@@ -319,6 +330,7 @@ test runs). The Firestore list is the production source of truth.
 | `start_frontend.sh` | Start Streamlit locally (nohup, port 8501, logs to logs/) |
 | `stop_frontend.sh` | Stop Streamlit (kills by PID file) |
 | `frontend/app.py` | Streamlit dashboard — Signals, Discovery, Universe, Ingest, Config tabs |
+| `frontend/lseg_scraper.py` | Playwright scraper — LSEG announcement body + challenge gate handling |
 | `frontend/requirements.txt` | Frontend Python dependencies |
 | `frontend/.env` | Sets GOOGLE_APPLICATION_CREDENTIALS — not committed |
 | `frontend/gcp-credentials.json` | GCP service account key — not committed |
