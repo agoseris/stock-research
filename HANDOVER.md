@@ -1,5 +1,5 @@
 # Session Handover
-**Date:** 26 February 2026
+**Date:** 27 February 2026
 **Branch:** `master`
 **Last commit:** (see git log)
 
@@ -7,19 +7,73 @@
 
 ## Current State
 
-App is at **v2.13**. All five tabs have been exercised against live data:
+App is at **v2.15**. Running locally on WSL2 at `http://localhost:8501`.
 
 | Tab | Status | Notes |
 |---|---|---|
-| Signals | Working | UI layout needs improvement — see Next Steps |
+| Signals | Working | UI layout not yet reviewed against real usage |
 | Discovery | Working | Assessed as **redundant** — see Next Steps |
 | Universe | Working | Both manual add and file import confirmed end-to-end |
-| Ingest | Working | Full workflow confirmed end-to-end |
+| Ingest | Working | Full workflow confirmed end-to-end. Feature complete. |
 | Config | Working | Exclusion list editable; changes reflected in next parse |
+
+**Local hosting active:** `./start_frontend.sh` from project root starts Streamlit nohup
+on port 8501. Credentials via `frontend/.env` → `frontend/gcp-credentials.json`.
+Community Cloud deployment archived (no longer primary).
 
 Known UX issue: Streamlit re-render latency makes any multi-row operation slow
 (2–5 seconds per action). Affects universe import absent-row review, Ingest muting,
-and Ingest row hiding. See Next Steps for the planned batch-action solution.
+and Ingest row hiding. Batch-action solution planned but deprioritised.
+
+---
+
+## What Was Built This Session (v2.14–v2.15)
+
+### Frontend Refactoring — Completed (v2.14–v2.15)
+
+`app.py` (was ~1,400 lines) split into five modules:
+
+| Module | Contents |
+|--------|----------|
+| `frontend/constants.py` | Emoji constants, config keys, default lists, outcome order/style |
+| `frontend/ui_helpers.py` | `parse_analysis`, `get_field`, `recommended_action_badge`, `recommend_add_badge`, `format_timestamp` |
+| `frontend/parse_helpers.py` | `_parse_lseg_excel`, `_parse_universe_csv`, `_compute_universe_delta` |
+| `frontend/firestore_helpers.py` | All Firestore reads/writes/cache functions (20 functions) |
+| `frontend/app.py` | Tab rendering + CSS only (~1,158 lines) |
+
+Import order in `app.py`: streamlit, dotenv, `load_dotenv()`, VERSION, `set_page_config()`,
+CSS, then `from constants/firestore_helpers/parse_helpers/ui_helpers import ...`.
+
+**Constraint still applies:** `frontend/` cannot import from `backend/`.
+
+### Local Hosting Setup
+
+Migrated Streamlit from Community Cloud to local WSL2 hosting:
+- `start_frontend.sh` — nohup Streamlit on port 8501, PID to `streamlit.pid`, log to `logs/`
+- `stop_frontend.sh` — clean shutdown via PID file
+- `frontend/.env` — sets `GOOGLE_APPLICATION_CREDENTIALS` to `frontend/gcp-credentials.json`
+- `logs/` and `streamlit.pid` added to `.gitignore`
+
+**Rationale:** LSEG pages are JS-rendered (raw HTTP returns no content); GCP IPs risk
+blocking (precedent: Google News). Local residential IP + local Playwright is the path
+to automating body retrieval and index page scraping. See Next Steps.
+
+### Exclusion List — Expanded
+
+All previously-missing types added via Config tab UI. Full current list now includes
+results announcements, gearing/portfolio disclosures, investor presentations, dividends.
+See updated exclusion list table below.
+
+**Key decision:** `Transaction in Own Shares` moved to EXCLUDED. Individual daily buyback
+announcements carry near-zero signal value; the signal is aggregate pattern (Lens 3).
+Results announcements (Final, Interim, Preliminary, Half-year, Audited) also excluded —
+lagging indicators, priced in fast.
+
+### Lens Workshop — Decisions (see `LENS_WORKSHOP_CANDIDATES_v2.md`)
+
+Five candidate lenses prioritised. Lens 1 (Director/PDMR Open-Market Buying) is next
+to implement. Two-axis state model designed (Signal State + Position State). Full detail
+in `SESSION_SUMMARY_27FEB2026.md` and `LENS_WORKSHOP_CANDIDATES_v2.md`.
 
 ---
 
@@ -236,38 +290,13 @@ caches at the start of every file upload, so the parse always uses fresh Firesto
 
 ---
 
-## Frontend Refactoring — Deferred
+## Frontend Refactoring — Completed (v2.14–v2.15)
 
-`frontend/app.py` is currently ~1,400 lines (a single monolithic file). This is
-normal for Streamlit due to its top-to-bottom re-execution model, but the file is
-at a size where it warrants eventual refactoring.
+`frontend/app.py` was split into five modules (see "What Was Built This Session" above).
+`app.py` is now ~1,158 lines (tab rendering + CSS only).
 
-**Decision: defer until the Ingest tab is stable and before the next major feature
-addition** (e.g. director/insider buying lens, new tab).
-
-**Recommended future structure:**
-
-```
-frontend/
-├── app.py                  # ~150 lines: page config, db init, tab routing only
-├── styles.css              # extracted CSS block (~200 lines, currently inline)
-├── firestore_helpers.py    # all Firestore read/write/cache functions (no st.* calls)
-├── parse_lseg.py           # _parse_lseg_excel() — pure logic, no st.* calls
-└── tabs/
-    ├── signals.py          # render_signals_tab(db)
-    ├── discovery.py        # render_discovery_tab(db)
-    ├── universe.py         # render_universe_tab(db)
-    ├── ingest.py           # render_ingest_tab(db)
-    └── config.py           # render_config_tab(db)
-```
-
-**Highest-value first step when refactoring begins:** extract `firestore_helpers.py`
-— it's pure Python with no `st.*` calls, zero regression risk, and immediately
-reduces `app.py` by ~250 lines.
-
-**Constraint:** `frontend/` cannot import from `backend/` (Streamlit Community Cloud
-deployment). `parse_lseg.py` must remain a separate copy of the backend parse logic
-(already the case today).
+**Constraint still applies:** `frontend/` cannot import from `backend/`. Parse logic
+remains duplicated between `frontend/parse_helpers.py` and `backend/lseg_excel_provider.py`.
 
 ---
 
@@ -311,79 +340,65 @@ user remembering which day the file was exported.
 | Google News / CSE | Parked | See SOBER_ASSESSMENT_v1.md |
 | LLM analysis | Live | Gemini 2.0 Flash, regulatory catalyst lens |
 | Notifications | Live | Telegram |
-| Dashboard | Live | Streamlit Community Cloud — v2.13, five tabs: Signals (working, layout TBD), Discovery (working, assessed redundant), Universe (working), Ingest (working), Config (working) |
+| Dashboard | Live | Local hosting (WSL2, port 8501) — v2.15, five tabs all working |
 | Cron schedule | Live | 07:00 UTC daily, logs to `~/pipeline.log` |
 
 ---
 
 ## Next Steps (Prioritised)
 
-### 1. Batch-action UX for multi-row operations — PRIORITY
+### Phase 1 — Reduce manual toil
 
-Streamlit's per-button re-render causes 2–5 second latency between row actions.
-This makes any workflow requiring sequential decisions across many rows painful in
-practice — specifically:
-- Universe import: reviewing 100 absent-row decisions (Remove / leave)
-- Ingest: muting multiple tickers one at a time
-- Ingest: hiding multiple rows one at a time
+1. **Headless browser body retrieval** — automate the "Analyse" body-paste step.
+   Playwright fetches LSEG announcement body when user clicks Analyse. Local hosting
+   is now in place; Playwright can be added to `frontend/requirements.txt` and called
+   directly from `app.py`.
 
-**Proposed solution:** replace per-row immediate actions with a selection + batch-commit
-pattern:
-- Rows get a checkbox (or similar) for multi-select
-- A toolbar above the table offers batch actions: "Remove selected", "Mute selected",
-  "Hide selected"
-- All selected mutations are written in a single Firestore/session-state operation,
-  triggering one rerun instead of N
-- Only **"Analyse ▾"** retains its current immediate per-row behaviour (body paste is
-  inherently individual)
+2. **Headless browser index page scraping** — automate the "Fetch" Excel-upload step.
+   Playwright scrapes the LSEG news explorer table. Replaces the manual Export → Upload
+   flow with a single "Fetch" button in the Ingest tab.
 
-This applies to: Ingest unified table (hide, mute), Universe import absent-row table
-(remove, mute).
+### Phase 2 — Build first lens
 
-### 2. Signals tab — UI layout improvement
+3. **Lens 1 workshop** — manual validation of director/PDMR buying signal quality.
+   Review historical PDMR announcements against subsequent price action to calibrate
+   thresholds before committing to code.
 
-Signals tab is functional but the card layout has not been reviewed against real usage.
-Specific areas to assess and improve:
-- Information density and ordering within each card
-- Whether the full-analysis expander is the right pattern or whether key fields should
-  surface inline
-- Dismiss flow and sort order
+4. **Signal state + position state schema** — design and implement in Firestore.
+   Two-axis model: Signal State (system-managed: Watching → Monitor → Signal Active →
+   Signal Reinforced/Mixed/Negative) + Position State (human-managed: Acted/Deferred/
+   Declined/Closed). See `SESSION_SUMMARY_27FEB2026.md` for full spec.
 
-### 3. Discovery tab — assess and remove or repurpose
+5. **Lens 1 implementation** — Director/PDMR Open-Market Buying as new `StrategyLensBase`.
+   Update notification logic to use state model.
 
-The Discovery tab appears completely redundant in practice:
-- Discovery results are only generated when a non-universe company is submitted via
-  the Ingest tab — a deliberate manual act
-- The submitter already knows the company; the LLM "recommend add?" assessment adds
-  little value over the human's own judgement
-- The tab creates noise without adding signal
+### Phase 3 — Expand
 
-**Options to consider:**
-- Remove the tab entirely; suppress discovery-queue routing in the job_runner
-- Repurpose: if a genuine unknown company surfaces (e.g. from a future automated
-  news source), the lightweight assessment may be useful — but that use case doesn't
-  exist yet
-- Decision deferred — record and revisit when RNS direct feed is in scope
+6. Lens 2 — Significant Shareholder Accumulation (TR-1)
+7. Lens 3 — Share Buyback Momentum (requires automated Transaction in Own Shares tracking)
+8. Accumulate signal data for Lens 5 (Signal Convergence) once 2+ lenses are operational
 
-### 4. Universe tab — Mute on non-universe ticker is redundant
-
-In the Ingest tab, the 🔇 Mute button is available on DISCOVERY rows (companies not
-in the universe). Muting a ticker that isn't monitored does nothing useful — there
-are no signals to suppress, and it won't affect the Ingest filter for that ticker
-since the non-universe route was already taken. The button should be removed from
-DISCOVERY rows, or replaced with a different action (e.g. "Block from discovery" if
-that concept is ever formalised).
-
-### 5. Remaining Pinned Items
+### Deprioritised (not abandoned)
 
 | Item | Status |
 |---|---|
-| RNS direct feed (EODHD ~$19–79/mo) | Not yet investigated — Priority 1 paid upgrade |
-| Director/Insider buying lens workshop | Requires RNS feed — manual workshop viable now |
+| Batch-action UX (multi-row Ingest/Universe operations) | Deferred — latency is a nuisance, not a blocker |
+| Signals tab card layout review | Deferred |
+| Discovery tab removal/repurposing | Deferred until RNS direct feed in scope |
+| 🔇 Mute on Discovery rows is redundant | Deferred minor cleanup |
+| RNS direct feed (EODHD ~$19–79/mo) | Priority 1 paid upgrade — not yet investigated |
 | Historic signal impact analysis | Prerequisite: RNS feed + price data |
-| Step 12: extend config store to LLM params, universe criteria, thesis params | Foundation in place — `app_config` collection established |
+| Step 12: LLM params, universe criteria in config store | Foundation in place |
 
-### Completed
+### Completed This Session
+
+- Frontend refactoring (v2.14–v2.15) — `app.py` split into 5 modules ✓
+- Local hosting setup — `start_frontend.sh`, `stop_frontend.sh`, `frontend/.env` ✓
+- Exclusion list expanded — results, gearing, presentations, dividends added ✓
+- Transaction in Own Shares moved to excluded ✓
+- Lens workshop — 5 candidates documented, state model designed ✓
+
+### Previously Completed
 
 - Trust/fund company name filter (Filter 2.5) — Firestore-managed keywords ✓
 - Universe file import via UI ✓
@@ -396,7 +411,7 @@ that concept is ever formalised).
 
 ## Current Exclusion List (source of truth: Firestore app_config/lseg_filters)
 
-Manageable via sidebar Filtration Rules panel:
+Manageable via sidebar Filtration Rules panel.
 
 | Type | Rationale |
 |---|---|
@@ -416,9 +431,31 @@ Manageable via sidebar Filtration Rules panel:
 | `Result of AGM` | Post-vote admin |
 | `Director Declaration` | Admin filing |
 | `Conversion of B Shares` | Admin corporate action |
+| `Transaction in Own Shares` | Daily buyback disclosure — signal is aggregate pattern, not per-announcement |
+| `Final Results` | Lagging indicator — priced in fast |
+| `Interim Results` | Lagging indicator |
+| `Preliminary Results` | Lagging indicator |
+| `Half-year Financial Report` | Lagging indicator |
+| `Half Year Results` | Lagging indicator |
+| `Half-Year Financial Results` | Lagging indicator |
+| `Half Yearly Results` | Lagging indicator |
+| `Audited Results` | Lagging indicator |
+| `Interim Financial Results` | Lagging indicator |
+| `Gearing Announcement` | Investment trust admin |
+| `Gearing disclosure` | Investment trust admin |
+| `Monthly Factsheet` | Investment trust admin |
+| `Monthly Fact sheet` | Investment trust admin |
+| `Monthly report as at` | Investment trust admin |
+| `Monthly Portfolio Update` | Investment trust admin |
+| `Portfolio Update` | Investment trust admin |
+| `Monthly Investor Report` | Investment trust admin |
+| `Investor Presentation` | Marketing material |
+| `Investor Webinar` | Marketing material |
+| `Dividend Declaration` | Routine distribution admin |
+| `Issue of Equity` | Admin corporate action |
 
-**Intentionally NOT excluded:** `TR-1` (major holdings crossings = on-thesis),
-`Transaction in Own Shares` (buybacks = management confidence = on-thesis).
+**Intentionally NOT excluded:** `TR-1` — major holdings crossings are on-thesis
+(informed party building a position). LLM evaluates these.
 
 ---
 

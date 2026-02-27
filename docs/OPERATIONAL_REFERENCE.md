@@ -1,6 +1,6 @@
 # Operational Reference — Stock Research System
 
-*Last updated: 26 February 2026 · App version: 2.13*
+*Last updated: 27 February 2026 · App version: 2.15*
 
 ---
 
@@ -86,16 +86,28 @@ echo "Deployment complete."
 
 ## 3. Services & Credentials
 
-### Streamlit Community Cloud
+### Streamlit — Local Hosting (primary)
+| Item | Value |
+|------|-------|
+| URL | `http://localhost:8501` |
+| Entry point | `frontend/app.py` |
+| Python venv | `frontend/venv/` |
+| Credentials | `frontend/gcp-credentials.json` (never committed) |
+| Env file | `frontend/.env` — sets `GOOGLE_APPLICATION_CREDENTIALS` (never committed) |
+| Start | `./start_frontend.sh` from project root — nohup, PID saved to `streamlit.pid` |
+| Stop | `./stop_frontend.sh` from project root |
+| Logs | `logs/streamlit.log` |
+
+### Streamlit Community Cloud (archived — no longer primary)
 | Item | Value |
 |------|-------|
 | App URL | `https://stock-research-j9xty7vswx3hxtwbk6ueol.streamlit.app/` |
 | Dashboard | `https://share.streamlit.io` |
-| Entry point | `frontend/app.py` |
-| Frontend requirements | `frontend/requirements.txt` |
-| GitHub account connected | `agoseris` |
-| Access | Private (invite only) |
 | GCP secret | Firestore service account JSON stored as `gcp_service_account` in Streamlit secrets (TOML format — see HANDOVER.md) |
+
+> **Note:** Community Cloud deployment is no longer the primary interface. Local hosting
+> is used instead, enabling future Playwright/headless browser integration. CC deployment
+> remains available as a fallback but is not actively maintained.
 
 ### Google Cloud / Firestore
 | Item | Value |
@@ -268,9 +280,12 @@ case-insensitive substring — `"Annual Report"` suppresses
 - Type in the Add field and click Add to insert a new entry
 - Changes take effect on the next Excel upload (or immediately if an Excel is already loaded)
 
-**Important:** types that could carry on-thesis signals are intentionally NOT excluded —
-e.g. `TR-1` (major holdings crossings = informed party building a position) and
-`Transaction in Own Shares` (buybacks = management confidence). The LLM evaluates these.
+**Important:** `TR-1` is intentionally NOT excluded — major holdings crossings are
+on-thesis (informed party building a position). The LLM evaluates these.
+
+`Transaction in Own Shares` is **excluded**: individual daily buyback announcements carry
+near-zero signal value. The signal is in the aggregate pattern (initiation, acceleration),
+which requires Lens 3 (Share Buyback Momentum) rather than per-announcement manual review.
 
 The `backend/lseg_excel_provider.py` module contains a fallback default list
 (`EXCLUDED_ANNOUNCEMENT_TYPES`) used only when Firestore is unavailable (e.g. offline
@@ -280,9 +295,9 @@ test runs). The Firestore list is the production source of truth.
 
 ## 6. Daily Workflow
 
-1. Navigate to LSEG daily URL (Section 4)
-2. Export to Excel (Download button, top right of news explorer)
-3. Open Streamlit app
+1. Start the app if not running: `./start_frontend.sh` → open `http://localhost:8501`
+2. Navigate to LSEG daily URL (Section 4)
+3. Export to Excel (Download button, top right of news explorer)
 4. **Ingest tab:** upload Excel — review filtered results
 5. For announcements of interest: click URL → read on LSEG → paste body → Submit
 6. **Signals tab:** review LLM analysis; dismiss reviewed items to archive them
@@ -301,8 +316,12 @@ test runs). The Firestore list is the production source of truth.
 
 | File | Role |
 |------|------|
-| `frontend/app.py` | Streamlit dashboard — Signals, Discovery, Ingest tabs + sidebar |
-| `frontend/requirements.txt` | Streamlit Community Cloud dependencies |
+| `start_frontend.sh` | Start Streamlit locally (nohup, port 8501, logs to logs/) |
+| `stop_frontend.sh` | Stop Streamlit (kills by PID file) |
+| `frontend/app.py` | Streamlit dashboard — Signals, Discovery, Universe, Ingest, Config tabs |
+| `frontend/requirements.txt` | Frontend Python dependencies |
+| `frontend/.env` | Sets GOOGLE_APPLICATION_CREDENTIALS — not committed |
+| `frontend/gcp-credentials.json` | GCP service account key — not committed |
 | `backend/pipeline.py` | Autonomous cron pipeline — entry point for daily CH run |
 | `backend/job_runner.py` | Interactive job queue worker — runs as systemd service |
 | `backend/lseg_excel_provider.py` | LSEG Excel parser + pre-filter logic |
