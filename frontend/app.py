@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.16"
+VERSION = "2.18"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -978,15 +978,22 @@ with tab_ingest:
                             if form_close.button("✕", key=f"cancel_{i}", help="Close"):
                                 st.session_state.pop(subform_key, None)
                                 st.rerun()
+                            fetch_err_key = f"fetch_err_{i}"
                             if _PLAYWRIGHT_AVAILABLE and src_url:
-                                if st.button("🔍 Auto-fetch body", key=f"fetch_{i}"):
-                                    with st.spinner("Fetching announcement body…"):
+                                if st.button("🔍 Auto-fetch & submit", key=f"fetch_{i}"):
+                                    with st.spinner("Fetching and submitting…"):
                                         try:
                                             fetched = _fetch_lseg_body(src_url)
-                                            st.session_state[row_key] = fetched
+                                            st.session_state.pop(fetch_err_key, None)
+                                            submit_job(db, row, fetched)
+                                            st.session_state["ingest_session_submitted"].add(row_uid)
+                                            st.session_state.pop(subform_key, None)
+                                            _get_processed_source_urls.clear()
+                                            st.rerun()
                                         except Exception as exc:
-                                            st.error(f"Auto-fetch failed: {exc}")
-                                    st.rerun()
+                                            st.session_state[fetch_err_key] = str(exc)
+                                if fetch_err_key in st.session_state:
+                                    st.error(f"Auto-fetch failed: {st.session_state[fetch_err_key]}")
                             body = st.text_area(
                                 "Announcement body",
                                 key=row_key,
