@@ -13,6 +13,10 @@ gcp-credentials.json
 # Scratch files
 *.save
 
+# Runtime
+logs/
+streamlit.pid
+
 # Data (optional - remove if you want these in git)
 # *.xlsx
 # *.csv
