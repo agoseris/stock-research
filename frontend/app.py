@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.15"
+VERSION = "2.16"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -273,6 +273,12 @@ from ui_helpers import (
     recommend_add_badge,
     format_timestamp,
 )
+
+try:
+    from lseg_scraper import fetch_announcement_body as _fetch_lseg_body
+    _PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    _PLAYWRIGHT_AVAILABLE = False
 
 # ── Header ─────────────────────────────────────────────────────────────────────
 
@@ -972,11 +978,20 @@ with tab_ingest:
                             if form_close.button("✕", key=f"cancel_{i}", help="Close"):
                                 st.session_state.pop(subform_key, None)
                                 st.rerun()
+                            if _PLAYWRIGHT_AVAILABLE and src_url:
+                                if st.button("🔍 Auto-fetch body", key=f"fetch_{i}"):
+                                    with st.spinner("Fetching announcement body…"):
+                                        try:
+                                            fetched = _fetch_lseg_body(src_url)
+                                            st.session_state[row_key] = fetched
+                                        except Exception as exc:
+                                            st.error(f"Auto-fetch failed: {exc}")
+                                    st.rerun()
                             body = st.text_area(
-                                "Paste announcement body",
+                                "Announcement body",
                                 key=row_key,
                                 height=150,
-                                placeholder="Copy and paste the full announcement text...",
+                                placeholder="Paste body text, or use Auto-fetch above",
                                 label_visibility="collapsed",
                             )
                             if st.button(
