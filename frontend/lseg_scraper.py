@@ -36,16 +36,19 @@ _BODY_HOST_SELECTOR = 'div[itemprop="articleBody"]'
 # Class of the content div inside the shadow root
 _BODY_CONTENT_CLASS = "news-body-content"
 
-# LSEG News Explorer base URL — indices appended per-call
+# LSEG News Explorer — bare URL, no filter params (for initial load test)
 _INDEX_BASE_URL = (
     "https://www.londonstockexchange.com/news"
-    "?tab=news-explorer&period=today&indices="
+    "?tab=news-explorer&indices="
 )
 
 # Individual index codes
 _INDEX_MCX = "MCX"   # FTSE 250
 _INDEX_AXX = "AXX"   # FTSE AIM All-Share
 _INDEX_SMX = "SMX"   # FTSE Small Cap
+
+# Bare test URL — no filters, no period; confirms tr.slide-panel selector works
+_INDEX_TEST_URL = "https://www.londonstockexchange.com/news?tab=news-explorer"
 
 # Angular ng-select pagination dropdown on the index page
 _PAGINATION_SELECTOR = "#dropdownSize"
@@ -121,7 +124,7 @@ def fetch_announcement_index(indices: str = _INDEX_MCX) -> list:
         ticker, company_name, announcement_type, source,
         source_url, published_at, price_pence, price_change_pct
     """
-    url = _INDEX_BASE_URL + indices
+    url = _INDEX_TEST_URL  # TODO: restore filter URL once selector mechanism confirmed
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         storage_state = str(_COOKIES_PATH) if _COOKIES_PATH.exists() else None
@@ -212,13 +215,6 @@ def _scrape_index(page) -> list:
     print(f"[lseg_scraper] index page url={page.url!r} title={page.title()!r}", flush=True)
     body_classes = page.locator("body").get_attribute("class") or ""
     print(f"[lseg_scraper] body classes={body_classes!r}", flush=True)
-
-    # Click "Apply filters" to trigger the search
-    try:
-        page.locator(_APPLY_FILTERS_SELECTOR).first.click(timeout=_ELEMENT_TIMEOUT)
-        print(f"[lseg_scraper] clicked Apply filters", flush=True)
-    except PlaywrightTimeout:
-        print(f"[lseg_scraper] Apply filters button not found — proceeding anyway", flush=True)
 
     try:
         page.wait_for_selector(_ROW_SELECTOR, timeout=_ELEMENT_TIMEOUT)
