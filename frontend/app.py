@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.18"
+VERSION = "2.19"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -827,8 +827,6 @@ with tab_ingest:
         all_rows = []
         for idx, r in enumerate(result["passed"]):
             all_rows.append({**r, "outcome": "passed", "reason": "", "_row_id": f"p_{idx}"})
-        for idx, r in enumerate(result["discovery"]):
-            all_rows.append({**r, "outcome": "discovery", "reason": "", "_row_id": f"d_{idx}"})
         for idx, (r, reason) in enumerate(result["suppressed"]):
             outcome = "muted" if reason.lower().startswith("ticker muted") else "suppressed"
             all_rows.append({**r, "outcome": outcome, "reason": reason, "_row_id": f"s_{idx}"})
@@ -855,7 +853,7 @@ with tab_ingest:
             key="ingest_sort_by",
         )
         filter_by = col_filter.selectbox(
-            "Show", ["All", "Passed", "Discovery", "Muted", "Suppressed"],
+            "Show", ["All", "Passed", "Muted", "Suppressed"],
             label_visibility="collapsed",
             key="ingest_filter_by",
         )
@@ -1011,46 +1009,6 @@ with tab_ingest:
                                 st.session_state.pop(subform_key, None)
                                 _get_processed_source_urls.clear()
                                 st.rerun()
-
-            elif row["outcome"] == "discovery":
-                row_key_admit = f"admit_{i}"
-                col_a, col_b = c_action.columns(2)
-
-                if col_a.button("⏫", key=f"admit_btn_{i}", help="Add to Universe"):
-                    if st.session_state.get(subform_key) == row_key_admit:
-                        st.session_state.pop(subform_key, None)
-                    else:
-                        st.session_state[subform_key] = row_key_admit
-                    st.rerun()
-
-                if col_b.button("✅", key=f"promote_btn_{i}", help="Promote to Passed"):
-                    # _row_id is "d_{idx}" — use idx to splice the exact element out
-                    disc_idx = int(row["_row_id"].split("_", 1)[1])
-                    disc_list = st.session_state["ingest_result"]["discovery"]
-                    if 0 <= disc_idx < len(disc_list):
-                        orig = disc_list.pop(disc_idx)
-                    else:
-                        orig = {k: v for k, v in row.items() if k not in ("outcome", "reason", "_row_id")}
-                    st.session_state["ingest_result"]["passed"].append(orig)
-                    st.rerun()
-
-                if st.session_state.get(subform_key) == row_key_admit:
-                    with st.container():
-                        st.caption("**Admit to Universe**")
-                        a_ticker   = st.text_input("Ticker",       value=row.get("ticker", ""),       key=f"da_t_{i}")
-                        a_name     = st.text_input("Company Name", value=row.get("company_name", ""), key=f"da_n_{i}")
-                        a_exchange = st.selectbox("Exchange",      ["AIM", "LSE Main"],               key=f"da_e_{i}")
-                        a_mcap     = st.number_input("Market Cap (£M, optional)", min_value=0.0, value=0.0, key=f"da_m_{i}")
-                        col_sub, col_can = st.columns([2, 1])
-                        if col_sub.button("Submit admission", key=f"da_submit_{i}"):
-                            exch_code = "AIM" if a_exchange == "AIM" else "LSE_MAIN"
-                            mcap_gbp = a_mcap * 1_000_000 if a_mcap > 0 else None
-                            submit_universe_admit_job(db, a_ticker, a_name, mcap_gbp, exch_code, not_of_interest=False)
-                            st.session_state.pop(subform_key, None)
-                            st.rerun()
-                        if col_can.button("Cancel", key=f"da_cancel_{i}"):
-                            st.session_state.pop(subform_key, None)
-                            st.rerun()
 
             else:
                 # Muted or suppressed — show reason on hover via help

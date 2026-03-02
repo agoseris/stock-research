@@ -27,10 +27,9 @@ _DEFAULT_EXCLUDED_TYPES = [
 
 _DEFAULT_COMPANY_KEYWORDS = ["trust", "trst", "income", "growth", "grwth", "fund"]
 
-_OUTCOME_ORDER = {"passed": 0, "discovery": 1, "muted": 2, "suppressed": 3}
+_OUTCOME_ORDER = {"passed": 0, "muted": 1, "suppressed": 2}
 _OUTCOME_STYLE = {
     "passed":     ("PASSED",     "#27ae60"),
-    "discovery":  ("DISCOVERY",  "#f39c12"),
     "muted":      ("MUTED",      "#7f8c8d"),
     "suppressed": ("SUPPRESSED", "#2980b9"),
 }
