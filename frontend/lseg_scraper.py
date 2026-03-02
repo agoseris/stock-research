@@ -1,19 +1,20 @@
 """
 lseg_scraper.py
 
-Playwright-based scraper for LSEG RNS announcement body text.
+Playwright-based scraper for LSEG RNS announcements.
+
+Provides two public functions:
+  fetch_announcement_body(url)  — RNS body text from an announcement detail page
+  fetch_announcement_index()    — all rows from today's LSEG News Explorer index
 
 Maintains a persistent browser cookie store so that the private investor
 challenge gate survives between calls. Cookie file: lseg_cookies.json
 in the same directory as this module (gitignored, never committed).
 
-Usage:
-    from lseg_scraper import fetch_announcement_body
-    body = fetch_announcement_body("https://www.londonstockexchange.com/news-article/...")
-
 Raises RuntimeError on failure (page not found, body empty, etc.).
 """
 
+from datetime import datetime, time, timezone
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -35,9 +36,23 @@ _BODY_HOST_SELECTOR = 'div[itemprop="articleBody"]'
 # Class of the content div inside the shadow root
 _BODY_CONTENT_CLASS = "news-body-content"
 
-_GOTO_TIMEOUT    = 30_000   # ms — page navigation
-_ELEMENT_TIMEOUT = 15_000   # ms — waiting for body element
-_CHALLENGE_TIMEOUT = 10_000  # ms — challenge gate interaction
+# Index page: FTSE 250 (MCX) + FTSE AIM All-Share (AXX) + FTSE Small Cap (SMX), today
+_INDEX_URL = (
+    "https://www.londonstockexchange.com/news"
+    "?tab=news-explorer&indices=MCX,AXX,SMX&period=today"
+)
+
+# Angular ng-select pagination dropdown on the index page
+_PAGINATION_SELECTOR = "#dropdownSize"
+_PAGINATION_500_TEXT  = "Show 500 news"
+
+# CSS selector for index result rows
+_ROW_SELECTOR = "tr.slide-panel"
+
+_GOTO_TIMEOUT      = 30_000   # ms — page navigation
+_ELEMENT_TIMEOUT   = 15_000   # ms — waiting for elements
+_CHALLENGE_TIMEOUT = 10_000   # ms — challenge gate interaction
+_PAGINATION_TIMEOUT = 20_000  # ms — pagination expansion + reload
 
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -81,6 +96,38 @@ def fetch_announcement_body(url: str) -> str:
             browser.close()
 
         return text
+
+
+def fetch_announcement_index() -> list:
+    """
+    Fetch today's announcements from the LSEG News Explorer index page.
+
+    Covers FTSE 250 (MCX), FTSE AIM All-Share (AXX), and FTSE Small Cap (SMX).
+    Handles the private investor challenge gate automatically.
+    Expands pagination to 500 rows before scraping.
+
+    Returns a list of row dicts with keys:
+        ticker, company_name, announcement_type, source,
+        source_url, published_at, price_pence, price_change_pct
+    """
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        storage_state = str(_COOKIES_PATH) if _COOKIES_PATH.exists() else None
+        context = browser.new_context(
+            storage_state=storage_state,
+            user_agent=_USER_AGENT,
+        )
+        page = context.new_page()
+
+        try:
+            _load_page(page, _INDEX_URL)
+            _handle_challenge_if_present(page, context)
+            rows = _scrape_index(page)
+        finally:
+            context.close()
+            browser.close()
+
+        return rows
 
 
 # ── Internal helpers ────────────────────────────────────────────────────────────
@@ -143,3 +190,93 @@ def _extract_body(page) -> str:
         )
 
     return text
+
+
+# ── Index scraping helpers ───────────────────────────────────────────────────────
+
+def _scrape_index(page) -> list:
+    """Wait for results, expand pagination to 500, extract all rows."""
+    try:
+        page.wait_for_selector(_ROW_SELECTOR, timeout=_ELEMENT_TIMEOUT)
+    except PlaywrightTimeout:
+        return []  # No results available (e.g. outside market hours)
+
+    _expand_to_500(page)
+    return _extract_index_rows(page)
+
+
+def _expand_to_500(page) -> None:
+    """Expand the Angular ng-select pagination dropdown to show 500 rows."""
+    try:
+        page.locator(_PAGINATION_SELECTOR).click(timeout=_ELEMENT_TIMEOUT)
+        page.get_by_text(_PAGINATION_500_TEXT).first.click(timeout=_ELEMENT_TIMEOUT)
+        page.wait_for_load_state("networkidle", timeout=_PAGINATION_TIMEOUT)
+    except PlaywrightTimeout:
+        # Pagination already at 500, or control unavailable — proceed with current view.
+        pass
+
+
+def _extract_index_rows(page) -> list:
+    """Extract all tr.slide-panel rows via a single JS evaluation."""
+    raw = page.evaluate("""
+        () => Array.from(document.querySelectorAll('tr.slide-panel')).map(row => {
+            const cells = row.querySelectorAll('td');
+            const link = cells[0] ? cells[0].querySelector('a.dash-link') : null;
+            return {
+                headline: cells[0] ? cells[0].innerText.trim() : '',
+                url:      link ? link.href : '',
+                source:   cells[1] ? cells[1].innerText.trim() : '',
+                date:     cells[2] ? cells[2].innerText.trim() : '',
+                time:     cells[3] ? cells[3].innerText.trim() : '',
+                price:    cells[4] ? cells[4].innerText.trim() : '',
+                change:   cells[5] ? cells[5].innerText.trim() : ''
+            };
+        })
+    """)
+
+    rows = []
+    for item in raw:
+        headline = item.get("headline", "")
+        parts = headline.replace("\xa0", " ").split(" - ", maxsplit=2)
+        company  = parts[0].strip() if parts else ""
+        ticker   = parts[1].strip() if len(parts) > 1 else ""
+        ann_type = parts[2].strip() if len(parts) > 2 else ""
+
+        change_str = item.get("change", "").strip()
+        rows.append({
+            "ticker":           ticker,
+            "company_name":     company,
+            "announcement_type": ann_type,
+            "source":           item.get("source", "").strip(),
+            "source_url":       item.get("url", ""),
+            "published_at":     _parse_index_dt(item.get("date", ""), item.get("time", "")),
+            "price_pence":      _parse_index_price(item.get("price", "")),
+            "price_change_pct": change_str if change_str and change_str != "-" else None,
+        })
+
+    return rows
+
+
+def _parse_index_dt(date_str: str, time_str: str):
+    """Parse 'DD.MM.YY' + 'HH:MM:SS' strings to a UTC-aware datetime."""
+    try:
+        d = datetime.strptime(date_str.strip(), "%d.%m.%y").date()
+    except (ValueError, AttributeError):
+        d = datetime.now(timezone.utc).date()
+
+    try:
+        t = datetime.strptime(time_str.strip(), "%H:%M:%S").time()
+    except (ValueError, AttributeError):
+        t = time(0, 0, 0)
+
+    return datetime.combine(d, t, tzinfo=timezone.utc)
+
+
+def _parse_index_price(val: str):
+    """Parse a price string (pence) to float, or None for '-' / empty."""
+    if not val or val == "-":
+        return None
+    try:
+        return float(val.replace(",", ""))
+    except ValueError:
+        return None

@@ -1,6 +1,6 @@
 # Session Handover
 **Last updated:** 2 March 2026
-**App version:** 2.19
+**App version:** 2.20
 **Branch:** `master`
 
 ---
@@ -14,7 +14,7 @@ App running locally on WSL2 at `http://localhost:8501`.
 | Signals | Working | UI layout not yet reviewed against real usage |
 | Discovery | Working | Post-LLM discovery results — distinct from Ingest discovery candidates |
 | Universe | Working | Manual add and file import both confirmed end-to-end |
-| Ingest | Working | Full workflow confirmed end-to-end. Auto-fetch & submit live. Discovery rows removed (v2.19). |
+| Ingest | Working | Full workflow confirmed end-to-end. Auto-fetch & submit live. Discovery rows removed (v2.19). "Fetch from LSEG" index button live (v2.20). |
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
 **Next steps:** see `ROADMAP.md`.

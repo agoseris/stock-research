@@ -11,13 +11,13 @@ from datetime import date, datetime, time, timezone
 import openpyxl
 
 
-def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types,
-                      company_keywords, not_of_interest_tickers):
+def _filter_announcement_rows(rows, universe_tickers, excluded_types,
+                              company_keywords, not_of_interest_tickers):
     """
-    Parse LSEG Excel export bytes and apply pre-filters.
+    Apply pre-filters to a list of announcement row dicts.
 
-    Returns a dict with keys: passed, discovery, suppressed, skipped_source, total_rows.
-    Each row is a plain dict (not a dataclass) suitable for Streamlit display.
+    Each row dict must have: ticker, company_name, announcement_type, source,
+    source_url, published_at, price_pence, price_change_pct.
 
     Filtering order:
       1. Source filter     — only RNS rows proceed
@@ -25,6 +25,72 @@ def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types,
       2.5. Name filter     — company_keywords matched against company name; matched rows suppressed
       2.8. Muted filter    — not_of_interest tickers suppressed
       3. Type filter       — excluded_types (loaded from Firestore app_config) suppressed
+
+    Returns a dict with keys: passed, discovery, suppressed, skipped_source, total_rows.
+    """
+    passed, discovery, suppressed = [], [], []
+    skipped_source = 0
+
+    for row_dict in rows:
+        ticker    = row_dict["ticker"]
+        company   = row_dict["company_name"]
+        ann_type  = row_dict["announcement_type"]
+        source_val = row_dict.get("source", "")
+
+        # Filter 1: Source
+        if source_val.upper() != "RNS":
+            skipped_source += 1
+            continue
+
+        row_dict = {**row_dict, "in_universe": ticker in universe_tickers}
+
+        # Filter 2: Universe
+        if not row_dict["in_universe"]:
+            discovery.append(row_dict)
+            continue
+
+        # Filter 2.5: Trust / fund company name
+        trust_match = next(
+            (kw for kw in company_keywords if kw in company.lower()),
+            None,
+        )
+        if trust_match:
+            suppressed.append((row_dict, f"Company name suggests investment trust/fund: '{trust_match}'"))
+            continue
+
+        # Filter 2.8: Muted ticker
+        if ticker.upper() in not_of_interest_tickers:
+            suppressed.append((row_dict, f"Ticker muted: '{ticker}'"))
+            continue
+
+        # Filter 3: Announcement type
+        ann_lower = ann_type.lower()
+        excluded_match = next(
+            (ex for ex in excluded_types if ex.lower() in ann_lower),
+            None,
+        )
+        if excluded_match:
+            suppressed.append((row_dict, f"Announcement type excluded: '{excluded_match}'"))
+            continue
+
+        passed.append(row_dict)
+
+    return {
+        "passed": passed,
+        "discovery": discovery,
+        "suppressed": suppressed,
+        "skipped_source": skipped_source,
+        "total_rows": len(rows),
+    }
+
+
+def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types,
+                      company_keywords, not_of_interest_tickers):
+    """
+    Parse LSEG Excel export bytes and apply pre-filters.
+
+    Returns a dict with keys: passed, discovery, suppressed, skipped_source, total_rows.
+    Each row is a plain dict (not a dataclass) suitable for Streamlit display.
     """
 
     def _parse_dt(date_val, time_val):
@@ -63,97 +129,50 @@ def _parse_lseg_excel(file_bytes, universe_tickers, excluded_types,
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
     ws = wb.active
 
-    passed, discovery, suppressed = [], [], []
-    skipped_source = 0
-    total_rows = 0
+    rows = []
 
     for row in ws.iter_rows(min_row=1):
         if all(cell.value is None for cell in row):
             continue
-        total_rows += 1
         cells = list(row)
 
         def cv(idx):
             return cells[idx].value if idx < len(cells) else None
 
         col1_val = cv(0)
+        if not col1_val:
+            continue
+
         source_val = str(cv(1) or "").strip()
         date_val = cv(2)
         time_val = cv(3)
         price_val = cv(4)
         price_change_val = cv(5)
 
-        if not col1_val:
-            continue
-
-        # Filter 1: Source
-        if source_val.upper() != "RNS":
-            skipped_source += 1
-            continue
-
         # Parse Col 1: "[Company] - [Ticker] - [Announcement Type]"
         parts = str(col1_val).replace("\xa0", " ").split(" - ", maxsplit=2)
-        company = parts[0].strip() if parts else ""
-        ticker = parts[1].strip() if len(parts) > 1 else ""
+        company  = parts[0].strip() if parts else ""
+        ticker   = parts[1].strip() if len(parts) > 1 else ""
         ann_type = parts[2].strip() if len(parts) > 2 else ""
 
         hyperlink = cells[0].hyperlink
         source_url = hyperlink.target if hyperlink and hyperlink.target else ""
 
-        published_at = _parse_dt(date_val, time_val)
-        price_pence = _parse_price(price_val)
         price_change_pct = str(price_change_val).strip() if price_change_val not in (None, "-", "") else None
 
-        row_dict = {
-            "ticker": ticker,
-            "company_name": company,
+        rows.append({
+            "ticker":            ticker,
+            "company_name":      company,
             "announcement_type": ann_type,
-            "source": source_val,
-            "published_at": published_at,
-            "price_pence": price_pence,
-            "price_change_pct": price_change_pct,
-            "source_url": source_url,
-            "in_universe": ticker in universe_tickers,
-        }
+            "source":            source_val,
+            "published_at":      _parse_dt(date_val, time_val),
+            "price_pence":       _parse_price(price_val),
+            "price_change_pct":  price_change_pct,
+            "source_url":        source_url,
+        })
 
-        # Filter 2: Universe
-        if not row_dict["in_universe"]:
-            discovery.append(row_dict)
-            continue
-
-        # Filter 2.5: Trust / fund company name
-        trust_match = next(
-            (kw for kw in company_keywords if kw in company.lower()),
-            None,
-        )
-        if trust_match:
-            suppressed.append((row_dict, f"Company name suggests investment trust/fund: '{trust_match}'"))
-            continue
-
-        # Filter 2.8: Muted ticker
-        if ticker.upper() in not_of_interest_tickers:
-            suppressed.append((row_dict, f"Ticker muted: '{ticker}'"))
-            continue
-
-        # Filter 3: Announcement type
-        ann_lower = ann_type.lower()
-        excluded_match = next(
-            (ex for ex in excluded_types if ex.lower() in ann_lower),
-            None,
-        )
-        if excluded_match:
-            suppressed.append((row_dict, f"Announcement type excluded: '{excluded_match}'"))
-            continue
-
-        passed.append(row_dict)
-
-    return {
-        "passed": passed,
-        "discovery": discovery,
-        "suppressed": suppressed,
-        "skipped_source": skipped_source,
-        "total_rows": total_rows,
-    }
+    return _filter_announcement_rows(rows, universe_tickers, excluded_types,
+                                     company_keywords, not_of_interest_tickers)
 
 
 def _parse_universe_csv(file_bytes: bytes) -> list:

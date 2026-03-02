@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.19"
+VERSION = "2.20"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -265,7 +265,10 @@ from firestore_helpers import (
     _get_processed_source_urls,
     submit_job,
 )
-from parse_helpers import _parse_lseg_excel, _parse_universe_csv, _compute_universe_delta
+from parse_helpers import (
+    _parse_lseg_excel, _parse_universe_csv, _compute_universe_delta,
+    _filter_announcement_rows,
+)
 from ui_helpers import (
     parse_analysis,
     get_field,
@@ -275,7 +278,10 @@ from ui_helpers import (
 )
 
 try:
-    from lseg_scraper import fetch_announcement_body as _fetch_lseg_body
+    from lseg_scraper import (
+        fetch_announcement_body as _fetch_lseg_body,
+        fetch_announcement_index as _fetch_lseg_index,
+    )
     _PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     _PLAYWRIGHT_AVAILABLE = False
@@ -758,15 +764,42 @@ with tab_universe:
 
 with tab_ingest:
 
-    # ── Step 1: Upload ─────────────────────────────────────────────────────────
+    # ── Step 1: Data source ─────────────────────────────────────────────────────
 
     st.markdown(
-        '<div class="terminal-header" style="margin-bottom:0.4rem;">Step 1 — Upload LSEG Export</div>',
+        '<div class="terminal-header" style="margin-bottom:0.4rem;">Step 1 — Data Source</div>',
         unsafe_allow_html=True,
     )
-    st.caption(
-        "Export from LSEG: Market News → filter Source=RNS, Market=AIM/Small Cap → Export to Excel."
-    )
+
+    if _PLAYWRIGHT_AVAILABLE:
+        if st.button("🔄 Fetch from LSEG", key="btn_fetch_lseg",
+                     help="Scrape today's announcements directly from LSEG News Explorer (MCX + AXX + SMX)"):
+            with st.spinner("Fetching today's announcements from LSEG…"):
+                try:
+                    get_exclusion_list.clear()
+                    get_company_keywords.clear()
+                    excluded_types        = get_exclusion_list(db)
+                    company_keywords      = get_company_keywords(db)
+                    not_of_interest_tickers = get_not_of_interest_tickers(db)
+                    universe_tickers      = get_universe_tickers(db)
+                    raw_rows = _fetch_lseg_index()
+                    st.session_state["ingest_result"] = _filter_announcement_rows(
+                        raw_rows, universe_tickers, excluded_types,
+                        company_keywords, not_of_interest_tickers,
+                    )
+                    st.session_state["ingest_cache_key"]        = None
+                    st.session_state["ingest_dismissed"]        = set()
+                    st.session_state["ingest_session_muted"]    = set()
+                    st.session_state["ingest_session_submitted"] = set()
+                    st.session_state.pop("ingest_subform_open", None)
+                    st.rerun()
+                except Exception as _fe:
+                    st.error(f"Fetch failed: {_fe}")
+        st.caption("— or upload an LSEG Excel export —")
+    else:
+        st.caption(
+            "Export from LSEG: Market News → filter Source=RNS, Market=AIM/Small Cap → Export to Excel."
+        )
 
     uploaded_file = st.file_uploader(
         "LSEG Excel export (.xlsx)",

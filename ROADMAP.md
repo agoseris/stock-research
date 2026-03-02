@@ -112,7 +112,7 @@ These are needed before Task 1.1 can be coded.
 
 ---
 
-**Task 1.1 — `fetch_announcement_index()` in `frontend/lseg_scraper.py`**
+**Task 1.1 — `fetch_announcement_index()` in `frontend/lseg_scraper.py` ✅ COMPLETE**
 
 New function alongside the existing `fetch_announcement_body()`:
 
@@ -141,7 +141,7 @@ not hardcoded inline, so they can be updated without touching logic.
 
 ---
 
-**Task 1.2 — Filter pipeline generalisation in `frontend/parse_helpers.py`**
+**Task 1.2 — Filter pipeline generalisation in `frontend/parse_helpers.py` ✅ COMPLETE**
 
 Currently `_parse_lseg_excel()` does parsing and filtering in one pass against
 a file object. The scraper path provides pre-parsed rows and needs the filtering
@@ -165,7 +165,7 @@ are unaffected.
 
 ---
 
-**Task 1.3 — Ingest tab UI in `frontend/app.py`**
+**Task 1.3 — Ingest tab UI in `frontend/app.py` ✅ COMPLETE**
 
 Add a "Fetch from LSEG" button above the existing Excel uploader:
 
