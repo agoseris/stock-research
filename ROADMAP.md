@@ -81,15 +81,31 @@ one dropdown interaction, one scrape pass.
 
 ### Delivery tasks
 
-**Task 1.0 — DOM reconnaissance (prerequisite, ~20 min)**
+**Task 1.0 — DOM reconnaissance ✅ COMPLETE**
 
-Load the URL in a browser with DevTools open. Record:
-- CSS selector / XPath for the pagination dropdown and "500" option
-- CSS selector for the results count display (used as wait condition)
-- CSS selector for each table row and the fields within it:
-  company name + ticker, announcement type, date, time, price, price change %,
-  source URL (href), source type (confirmed present: RNS / PRN / MFN / BZN /
-  Reach / GNW / EQS)
+Confirmed selectors:
+
+| Element | Selector | Notes |
+|---------|----------|-------|
+| Each row | `tr.slide-panel` | Confirmed: 196 rows = 196 results |
+| Company + ticker | `td.news-title` first text node | e.g. "Nexus Infrastructure PLC - NEXS - " — split on " - " |
+| Announcement type | `td.news-title a.dash-link` inner text | e.g. "Director Dealing" |
+| Source URL | `td.news-title a.dash-link` href | Relative — prepend `https://www.londonstockexchange.com/` |
+| Source type | `td.hide-on-portrait.rns-source` | e.g. "RNS", "Reach", "GNW" |
+| Date | `td.hide-on-portrait:not(.rns-source)` index 0 | Format: `DD.MM.YY` |
+| Time | `td.hide-on-portrait:not(.rns-source)` index 1 | Format: `HH:MM:SS` |
+| Price | `td.hide-on-portrait:not(.rns-source)` index 2 | Numeric string or "-" |
+| Price change | `td.hide-on-portrait:not(.rns-source)` index 3 | String e.g. "1.59%" or "-" |
+| Pagination dropdown | `#dropdownSize` | Angular ng-select — click to open, then click option by text |
+| Pagination option | `.ng-option:has-text("Show 500 news")` | Text match inside the open dropdown panel |
+| Results count | `span.total-results` | Used as wait condition; matches row count |
+
+Desktop layout (`hide-on-portrait` columns) is used for all fields — cleaner
+than the mobile `.show-on-portrait` equivalent. Headless Playwright uses a
+desktop viewport by default so these columns are always present.
+
+`_ngcontent-ng-lseg-c*` attributes are Angular encapsulation IDs that change
+between deploys — never include in selectors.
 
 Output: a short note (can be added directly to this section) with the selectors.
 These are needed before Task 1.1 can be coded.
