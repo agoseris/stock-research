@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.20"
+VERSION = "2.21"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -783,16 +783,23 @@ with tab_ingest:
                     not_of_interest_tickers = get_not_of_interest_tickers(db)
                     universe_tickers      = get_universe_tickers(db)
                     raw_rows = _fetch_lseg_index()
-                    st.session_state["ingest_result"] = _filter_announcement_rows(
-                        raw_rows, universe_tickers, excluded_types,
-                        company_keywords, not_of_interest_tickers,
-                    )
-                    st.session_state["ingest_cache_key"]        = None
-                    st.session_state["ingest_dismissed"]        = set()
-                    st.session_state["ingest_session_muted"]    = set()
-                    st.session_state["ingest_session_submitted"] = set()
-                    st.session_state.pop("ingest_subform_open", None)
-                    st.rerun()
+                    if not raw_rows:
+                        st.warning(
+                            "Fetched 0 rows from LSEG. "
+                            "The market may be closed, or the page took too long to load. "
+                            "Check logs/streamlit.log for details."
+                        )
+                    else:
+                        st.session_state["ingest_result"] = _filter_announcement_rows(
+                            raw_rows, universe_tickers, excluded_types,
+                            company_keywords, not_of_interest_tickers,
+                        )
+                        st.session_state["ingest_cache_key"]        = None
+                        st.session_state["ingest_dismissed"]        = set()
+                        st.session_state["ingest_session_muted"]    = set()
+                        st.session_state["ingest_session_submitted"] = set()
+                        st.session_state.pop("ingest_subform_open", None)
+                        st.rerun()
                 except Exception as _fe:
                     st.error(f"Fetch failed: {_fe}")
         st.caption("— or upload an LSEG Excel export —")
