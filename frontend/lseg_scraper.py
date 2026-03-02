@@ -54,6 +54,9 @@ _PAGINATION_500_TEXT  = "Show 500 news"
 # CSS selector for index result rows
 _ROW_SELECTOR = "tr.slide-panel"
 
+# "Apply filters" button on the News Explorer index page
+_APPLY_FILTERS_SELECTOR = "span.apply-button"
+
 _GOTO_TIMEOUT      = 30_000   # ms — page navigation
 _ELEMENT_TIMEOUT   = 15_000   # ms — waiting for elements
 _CHALLENGE_TIMEOUT = 10_000   # ms — challenge gate interaction
@@ -205,10 +208,17 @@ def _extract_body(page) -> str:
 # ── Index scraping helpers ───────────────────────────────────────────────────────
 
 def _scrape_index(page) -> list:
-    """Wait for results, expand pagination to 500, extract all rows."""
+    """Click Apply Filters, wait for results, expand pagination to 500, extract all rows."""
     print(f"[lseg_scraper] index page url={page.url!r} title={page.title()!r}", flush=True)
     body_classes = page.locator("body").get_attribute("class") or ""
     print(f"[lseg_scraper] body classes={body_classes!r}", flush=True)
+
+    # Click "Apply filters" to trigger the search
+    try:
+        page.locator(_APPLY_FILTERS_SELECTOR).first.click(timeout=_ELEMENT_TIMEOUT)
+        print(f"[lseg_scraper] clicked Apply filters", flush=True)
+    except PlaywrightTimeout:
+        print(f"[lseg_scraper] Apply filters button not found — proceeding anyway", flush=True)
 
     try:
         page.wait_for_selector(_ROW_SELECTOR, timeout=_ELEMENT_TIMEOUT)
