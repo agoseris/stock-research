@@ -144,6 +144,7 @@ def _handle_challenge_if_present(page, context) -> None:
     body_classes = page.locator("body").get_attribute("class") or ""
     if _CHALLENGE_BODY_CLASS not in body_classes:
         return
+    print(f"[lseg_scraper] challenge gate detected — clicking private investor")
 
     try:
         page.get_by_text(_PRIVATE_INVESTOR_TEXT).first.click(
@@ -196,13 +197,21 @@ def _extract_body(page) -> str:
 
 def _scrape_index(page) -> list:
     """Wait for results, expand pagination to 500, extract all rows."""
+    print(f"[lseg_scraper] index page url={page.url!r} title={page.title()!r}")
+    body_classes = page.locator("body").get_attribute("class") or ""
+    print(f"[lseg_scraper] body classes={body_classes!r}")
+
     try:
         page.wait_for_selector(_ROW_SELECTOR, timeout=_ELEMENT_TIMEOUT)
     except PlaywrightTimeout:
+        print(f"[lseg_scraper] TIMEOUT waiting for {_ROW_SELECTOR!r} — returning []")
         return []  # No results available (e.g. outside market hours)
 
+    print(f"[lseg_scraper] {_ROW_SELECTOR} found — expanding to 500")
     _expand_to_500(page)
-    return _extract_index_rows(page)
+    rows = _extract_index_rows(page)
+    print(f"[lseg_scraper] extracted {len(rows)} rows")
+    return rows
 
 
 def _expand_to_500(page) -> None:
@@ -211,9 +220,9 @@ def _expand_to_500(page) -> None:
         page.locator(_PAGINATION_SELECTOR).click(timeout=_ELEMENT_TIMEOUT)
         page.get_by_text(_PAGINATION_500_TEXT).first.click(timeout=_ELEMENT_TIMEOUT)
         page.wait_for_load_state("networkidle", timeout=_PAGINATION_TIMEOUT)
+        print("[lseg_scraper] pagination expanded to 500")
     except PlaywrightTimeout:
-        # Pagination already at 500, or control unavailable — proceed with current view.
-        pass
+        print("[lseg_scraper] pagination expand timed out — proceeding with current view")
 
 
 def _extract_index_rows(page) -> list:
