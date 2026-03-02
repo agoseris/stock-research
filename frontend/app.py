@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.30"
+VERSION = "2.31"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -856,7 +856,7 @@ with tab_ingest:
         c1.metric("Total rows", result["total_rows"])
         c2.metric("Skipped (non-RNS)", result["skipped_source"])
         c3.metric("Passed filters", len(result["passed"]))
-        c4.metric("Discovery candidates", len(result["discovery"]))
+        c4.metric("Non-universe (skipped)", len(result["discovery"]))
         c5.metric("Suppressed", len(result["suppressed"]))
 
         st.markdown("---")
