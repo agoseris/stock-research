@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.24"
+VERSION = "2.25"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -281,6 +281,7 @@ try:
     from lseg_scraper import (
         fetch_announcement_body as _fetch_lseg_body,
         fetch_announcement_index as _fetch_lseg_index,
+        _INDEX_MCX, _INDEX_AXX, _INDEX_SMX,
     )
     _PLAYWRIGHT_AVAILABLE = True
 except ImportError:
@@ -782,7 +783,8 @@ with tab_ingest:
                     company_keywords      = get_company_keywords(db)
                     not_of_interest_tickers = get_not_of_interest_tickers(db)
                     universe_tickers      = get_universe_tickers(db)
-                    raw_rows = _fetch_lseg_index()
+                    # TODO: expand to three-shot (MCX + AXX + SMX) once single-index fetch confirmed working
+                    raw_rows = _fetch_lseg_index(_INDEX_MCX)
                     if not raw_rows:
                         st.warning(
                             "Fetched 0 rows from LSEG. "

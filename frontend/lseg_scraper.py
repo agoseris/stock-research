@@ -36,11 +36,16 @@ _BODY_HOST_SELECTOR = 'div[itemprop="articleBody"]'
 # Class of the content div inside the shadow root
 _BODY_CONTENT_CLASS = "news-body-content"
 
-# Index page: FTSE 250 (MCX) + FTSE AIM All-Share (AXX) + FTSE Small Cap (SMX), today
-_INDEX_URL = (
+# LSEG News Explorer base URL — indices appended per-call
+_INDEX_BASE_URL = (
     "https://www.londonstockexchange.com/news"
-    "?tab=news-explorer&indices=MCX,AXX,SMX&period=today"
+    "?tab=news-explorer&period=today&indices="
 )
+
+# Individual index codes
+_INDEX_MCX = "MCX"   # FTSE 250
+_INDEX_AXX = "AXX"   # FTSE AIM All-Share
+_INDEX_SMX = "SMX"   # FTSE Small Cap
 
 # Angular ng-select pagination dropdown on the index page
 _PAGINATION_SELECTOR = "#dropdownSize"
@@ -98,11 +103,14 @@ def fetch_announcement_body(url: str) -> str:
         return text
 
 
-def fetch_announcement_index() -> list:
+def fetch_announcement_index(indices: str = _INDEX_MCX) -> list:
     """
-    Fetch today's announcements from the LSEG News Explorer index page.
+    Fetch today's announcements from the LSEG News Explorer for a single index code.
 
-    Covers FTSE 250 (MCX), FTSE AIM All-Share (AXX), and FTSE Small Cap (SMX).
+    indices: one of _INDEX_MCX ('MCX'), _INDEX_AXX ('AXX'), _INDEX_SMX ('SMX').
+    Call three times and concatenate to cover all three indices — combining them
+    in a single URL occasionally returns zero results from LSEG.
+
     Handles the private investor challenge gate automatically.
     Expands pagination to 500 rows before scraping.
 
@@ -110,6 +118,7 @@ def fetch_announcement_index() -> list:
         ticker, company_name, announcement_type, source,
         source_url, published_at, price_pence, price_change_pct
     """
+    url = _INDEX_BASE_URL + indices
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         storage_state = str(_COOKIES_PATH) if _COOKIES_PATH.exists() else None
@@ -120,7 +129,7 @@ def fetch_announcement_index() -> list:
         page = context.new_page()
 
         try:
-            _load_page(page, _INDEX_URL)
+            _load_page(page, url)
             _handle_challenge_if_present(page, context)
             rows = _scrape_index(page)
         finally:
