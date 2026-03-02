@@ -10,11 +10,12 @@ Run with:
 """
 
 import streamlit as st
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.29"
+VERSION = "2.30"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -886,17 +887,29 @@ with tab_ingest:
 
         # ── Sort and filter controls ───────────────────────────────────────────
 
-        col_sort, col_filter = st.columns([2, 2])
+        col_sort, col_filter, col_since = st.columns([2, 2, 2])
         sort_by = col_sort.selectbox(
             "Sort by", ["Outcome", "Date", "Ticker", "Company"],
             label_visibility="collapsed",
             key="ingest_sort_by",
         )
         filter_by = col_filter.selectbox(
-            "Show", ["All", "Passed", "Muted", "Suppressed"],
+            "Show", ["Passed", "All", "Muted", "Suppressed"],
             label_visibility="collapsed",
             key="ingest_filter_by",
         )
+        _SINCE_OPTIONS = {"All today": None, "Last 4h": 4, "Last 2h": 2, "Last 1h": 1, "Last 30m": 0.5}
+        since_label = col_since.selectbox(
+            "Since", list(_SINCE_OPTIONS.keys()),
+            label_visibility="collapsed",
+            key="ingest_since",
+        )
+        hide_analysed = st.checkbox(
+            "Hide already analysed", value=True, key="ingest_hide_analysed"
+        )
+
+        # Fetch already-processed URLs for "✓ Analysed" indicator and hide-analysed filter
+        processed_urls = _get_processed_source_urls(db)
 
         sort_fns = {
             "Outcome":  lambda r: (_OUTCOME_ORDER.get(r["outcome"], 9), str(r.get("published_at", ""))),
@@ -907,9 +920,15 @@ with tab_ingest:
         rows = sorted(all_rows, key=sort_fns[sort_by])
         if filter_by != "All":
             rows = [r for r in rows if r["outcome"] == filter_by.lower()]
-
-        # Fetch already-processed URLs for "✓ Analysed" indicator
-        processed_urls = _get_processed_source_urls(db)
+        since_hours = _SINCE_OPTIONS[since_label]
+        if since_hours is not None:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+            rows = [r for r in rows if r.get("published_at", datetime.min.replace(tzinfo=timezone.utc)) >= cutoff]
+        if hide_analysed:
+            rows = [
+                r for r in rows
+                if r.get("source_url") not in processed_urls or r["outcome"] != "passed"
+            ]
 
         # ── Column header row ──────────────────────────────────────────────────
 
