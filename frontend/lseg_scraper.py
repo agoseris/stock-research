@@ -204,7 +204,9 @@ def _scrape_index(page) -> list:
     try:
         page.wait_for_selector(_ROW_SELECTOR, timeout=_ELEMENT_TIMEOUT)
     except PlaywrightTimeout:
-        print(f"[lseg_scraper] TIMEOUT waiting for {_ROW_SELECTOR!r} — returning []", flush=True)
+        screenshot_path = str(Path(__file__).parent / "debug_screenshot.png")
+        page.screenshot(path=screenshot_path, full_page=True)
+        print(f"[lseg_scraper] TIMEOUT waiting for {_ROW_SELECTOR!r} — screenshot saved to {screenshot_path}", flush=True)
         return []  # No results available (e.g. outside market hours)
 
     print(f"[lseg_scraper] {_ROW_SELECTOR} found — expanding to 500", flush=True)
