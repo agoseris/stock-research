@@ -1,6 +1,6 @@
 # Session Handover
 **Last updated:** 2 March 2026
-**App version:** 2.20
+**App version:** 2.29
 **Branch:** `master`
 
 ---
@@ -14,7 +14,7 @@ App running locally on WSL2 at `http://localhost:8501`.
 | Signals | Working | UI layout not yet reviewed against real usage |
 | Discovery | Working | Post-LLM discovery results — distinct from Ingest discovery candidates |
 | Universe | Working | Manual add and file import both confirmed end-to-end |
-| Ingest | Working | Full workflow confirmed end-to-end. Auto-fetch & submit live. Discovery rows removed (v2.19). "Fetch from LSEG" index button live (v2.20). |
+| Ingest | Working | **Phase 1 complete (v2.29).** "Fetch from LSEG" button live — 471 rows, 54 passed. Bare URL + Python date filter; Angular filter params abandoned (unreliable headless). Excel upload retained as fallback. |
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
 **Next steps:** see `ROADMAP.md`.
@@ -27,7 +27,8 @@ App running locally on WSL2 at `http://localhost:8501`.
 |---|---|---|
 | Universe | Live | 847 companies (93 muted); no market cap ceiling in code |
 | Companies House | Live | 673 CH-matched companies; full scan daily cron at 07:00 UTC, 2-day window |
-| LSEG Excel ingestion | Live (interactive) | Human-triggered via Ingest tab — confirmed end-to-end |
+| LSEG index fetch | Live (interactive) | "Fetch from LSEG" button — bare URL, expand to 500, Python date filter. 471 rows / 54 passed confirmed 2 Mar 2026. |
+| LSEG Excel ingestion | Live (fallback) | Excel upload still available if fetch fails |
 | Job runner | Live | Running as systemd service `job_runner` on VM |
 | LLM analysis | Live | Gemini 2.0 Flash, regulatory catalyst lens |
 | Notifications | Live | Telegram |

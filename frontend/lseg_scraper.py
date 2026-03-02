@@ -5,7 +5,15 @@ Playwright-based scraper for LSEG RNS announcements.
 
 Provides two public functions:
   fetch_announcement_body(url)  — RNS body text from an announcement detail page
-  fetch_announcement_index()    — all rows from today's LSEG News Explorer index
+  fetch_announcement_index()    — today's rows from the LSEG News Explorer
+
+Notes on fetch_announcement_index():
+  - Navigates to the bare News Explorer URL (no filter params). Angular filter
+    state is unreliable in headless mode; date and index filtering is done in
+    Python instead.
+  - Expands pagination to 500 via the ng-select dropdown (#dropdownSize).
+  - Filters to today's UTC date before returning.
+  - Universe / source / type filtering handled downstream by _filter_announcement_rows().
 
 Maintains a persistent browser cookie store so that the private investor
 challenge gate survives between calls. Cookie file: lseg_cookies.json
@@ -46,8 +54,6 @@ _PAGINATION_500_TEXT  = "Show 500 news"
 # CSS selector for index result rows
 _ROW_SELECTOR = "tr.slide-panel"
 
-# "Apply filters" button on the News Explorer index page
-_APPLY_FILTERS_SELECTOR = "span.apply-button"
 
 _GOTO_TIMEOUT      = 30_000   # ms — page navigation
 _ELEMENT_TIMEOUT   = 15_000   # ms — waiting for elements

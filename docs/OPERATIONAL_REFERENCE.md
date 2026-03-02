@@ -311,15 +311,20 @@ test runs). The Firestore list is the production source of truth.
 ## 6. Daily Workflow
 
 1. Start the app if not running: `./start_frontend.sh` → open `http://localhost:8501`
-2. Navigate to LSEG daily URL (Section 4)
-3. Export to Excel (Download button, top right of news explorer)
-4. **Ingest tab:** upload Excel — review filtered results
-5. For announcements of interest: click **Analyse ▾** → **🔍 Auto-fetch & submit**
+2. **Ingest tab:** click **🔄 Fetch from LSEG** — scrapes today's full RNS feed (~471 rows),
+   applies all pre-filters, populates the announcement table automatically.
+   *(Excel upload remains available as fallback if the fetch fails.)*
+3. For announcements of interest: click **Analyse ▾** → **🔍 Auto-fetch & submit**
    (Playwright fetches body and auto-submits). Manual paste still available if needed.
-6. **Signals tab:** review LLM analysis; dismiss reviewed items to archive them
-7. **Discovery Queue tab:** shows post-LLM results for non-universe companies that
-   were submitted via Ingest. Rarely populated in normal workflow — if a company is
-   worth analysing it should be added to the universe first via the Universe tab.
+4. **Signals tab:** review LLM analysis; dismiss reviewed items to archive them
+5. **Discovery Queue tab:** shows post-LLM results for non-universe companies submitted
+   via Ingest. If a company is worth analysing, add to universe first via Universe tab.
+
+**Fetch implementation notes:**
+- Navigates to bare LSEG News Explorer URL (no filter params — Angular filter state
+  unreliable in headless mode). Expands pagination to 500 via ng-select dropdown.
+- Filters to today's UTC date in Python. Universe/source/type filtering via standard pipeline.
+- On failure: `st.warning()` shown in UI; check `logs/streamlit.log` for `[lseg_scraper]` lines.
 
 ---
 
