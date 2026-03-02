@@ -158,12 +158,17 @@ on VM only — never committed.
 
 | Filter | URL |
 |--------|-----|
-| **Daily operational (AIM + Small Cap, RNS only)** | `https://www.londonstockexchange.com/news?tab=news-explorer&sources=RNS&indices=SMX,AXX&period=today` |
-| AIM only | `https://www.londonstockexchange.com/news?tab=news-explorer&sources=RNS&indices=AXX&period=today` |
-| FTSE Small Cap only | `https://www.londonstockexchange.com/news?tab=news-explorer&sources=RNS&indices=SMX&period=today` |
-| FTSE All-Share | `https://www.londonstockexchange.com/news?tab=news-explorer&sources=RNS&indices=ASX&period=today` |
+| **Daily operational (FTSE 250 + AIM + Small Cap)** | `https://www.londonstockexchange.com/news?tab=news-explorer&indices=MCX,AXX,SMX&period=today` |
+| AIM only | `https://www.londonstockexchange.com/news?tab=news-explorer&indices=AXX&period=today` |
+| FTSE Small Cap only | `https://www.londonstockexchange.com/news?tab=news-explorer&indices=SMX&period=today` |
+| FTSE 250 only | `https://www.londonstockexchange.com/news?tab=news-explorer&indices=MCX&period=today` |
 
-LSEG index codes: `AXX` = FTSE AIM All-Share · `SMX` = FTSE Small Cap · `ASX` = FTSE All-Share
+LSEG index codes: `MCX` = FTSE 250 · `AXX` = FTSE AIM All-Share · `SMX` = FTSE Small Cap
+
+Notes on filter behaviour:
+- `indices=` and `period=` are encoded in the URL and fully controllable
+- News Type filter ("Earnings, News & Reach") is JavaScript state, not in URL — leave at default
+- Pagination defaults to 20 rows; "Show 500" option available via on-page dropdown
 
 > **Access:** Private investor exemption permits manual browsing and personal-use Excel export. Programmatic access prohibited by LSEG terms.
 

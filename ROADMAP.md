@@ -15,28 +15,179 @@ operational and accumulating signal data.
 ## Phase 1 — Automation: LSEG Index Page Scraping
 
 **Goal:** Eliminate the manual Excel export step. The Ingest table auto-populates
-from LSEG directly via Playwright.
+from LSEG directly via Playwright. One button click replaces the current
+Export → Upload workflow.
 
 **Current state:** Body retrieval and auto-submit are complete (v2.16–2.18). The
-remaining gap is scraping the LSEG announcement index so the user does not need
-to export an Excel file first.
-
-**Deliverables:**
-- `frontend/lseg_scraper.py` — extend with `fetch_announcement_index()` function
-  that scrapes the LSEG RNS index page and returns a list of rows in the same
-  format as `_parse_lseg_excel()` output
-- Replace the `📂 Upload LSEG Excel` file uploader in the Ingest tab with a
-  `🔄 Fetch from LSEG` button that calls the scraper and populates the table
-- Keep the Excel upload as a fallback for manual use / offline scenarios
+remaining gap is scraping the LSEG announcement index.
 
 **Dependencies:** None — independent of all other phases.
 
-**Notes:**
-- LSEG pages are JS-rendered; raw HTTP returns nothing. Playwright (already in use)
-  is the right tool.
-- Local hosting decision (v2.15) was driven by this use case — residential IP
-  avoids GCP blocking.
-- Session cookies are already persisted (`lseg_cookies.json`).
+---
+
+### Confirmed technical behaviour
+
+**URL (single, covers all three indices):**
+```
+https://www.londonstockexchange.com/news?tab=news-explorer&indices=MCX,AXX,SMX&period=today
+```
+`MCX` = FTSE 250 · `AXX` = FTSE AIM All-Share · `SMX` = FTSE Small Cap
+
+**Period:** `&period=today` in the URL locks to today's announcements. If a
+different period is selected by the user, LSEG appends `&period=lastweek` or
+`&period=custom&beforedate=...&afterdate=...` — the parameter scheme is clean.
+
+**News Type filter:** defaults to "Show only Earnings, News & Reach" and is not
+encoded in the URL. Leave it at the default. The existing Filter 1 in the parse
+pipeline (source column check, drops non-RNS rows) handles any Reach/GNW content
+that comes through. No Playwright interaction needed for this filter.
+
+**Pagination:** dropdown at the top of the results table, alongside a sort
+dropdown. Defaults to 20 rows. Options: 20 / 50 / 100 / 500. Playwright selects
+"500" and waits for the count display (e.g. "254 results (showing 254)") to
+confirm the full set is loaded before scraping.
+
+**Sort:** defaults to "most recent" — no interaction needed.
+
+**Source URLs:** confirmed present — each row carries a clickable link to the
+full announcement page. The "✓ Analysed" indicator and "Auto-fetch & submit"
+button both depend on this URL and will work correctly for scraped rows.
+
+**Challenge gate:** already handled by existing `lseg_scraper.py` logic
+(detects `body.block-scroll`, confirms private investor, saves cookies). The
+same mechanism covers the index page.
+
+**One remaining unknown:** whether each row visibly exposes its **source type**
+(RNS / Reach / GNW). This is needed for Filter 1. To be confirmed in Task 1.0.
+If source type is not in the table, Filter 1 is skipped for scraped rows (all
+rows treated as RNS-equivalent and routed through the remaining filters). Given
+the News Type default already narrows to Earnings/News/Reach, this is low risk.
+
+---
+
+### Playwright interaction sequence
+
+```
+1. Navigate to URL (with challenge gate handling)
+2. Wait for results table to appear
+3. Click pagination dropdown → select "500"
+4. Wait for count display to update (confirm full result set loaded)
+5. Scrape all visible rows
+6. Return list of row dicts
+```
+
+No filter interactions required. Sorting is already correct. One page load,
+one dropdown interaction, one scrape pass.
+
+---
+
+### Delivery tasks
+
+**Task 1.0 — DOM reconnaissance (prerequisite, ~20 min)**
+
+Load the URL in a browser with DevTools open. Record:
+- CSS selector / XPath for the pagination dropdown and "500" option
+- CSS selector for the results count display (used as wait condition)
+- CSS selector for each table row and the fields within it:
+  company name + ticker, announcement type, date, time, price, price change %,
+  source URL (href), and source type (RNS/Reach/GNW) if present
+- Confirm whether source type is a visible column in the table
+
+Output: a short note (can be added directly to this section) with the selectors.
+These are needed before Task 1.1 can be coded.
+
+---
+
+**Task 1.1 — `fetch_announcement_index()` in `frontend/lseg_scraper.py`**
+
+New function alongside the existing `fetch_announcement_body()`:
+
+```python
+def fetch_announcement_index() -> list[dict]:
+    """
+    Scrape the LSEG News Explorer (MCX + AXX + SMX, today).
+    Returns a list of row dicts:
+      ticker, company_name, announcement_type, source, published_at,
+      price_pence, price_change_pct, source_url
+    'source' is 'RNS' if not extractable from the table, else the actual value.
+    Raises RuntimeError on failure.
+    """
+```
+
+Internal steps:
+1. Navigate to the confirmed URL
+2. Handle challenge gate (existing mechanism)
+3. Wait for results table to appear
+4. Click pagination dropdown, select "500"; wait for count display to confirm
+5. Scrape all visible rows into list of dicts
+6. Return list
+
+The URL and selectors are stored as module-level constants in `lseg_scraper.py`,
+not hardcoded inline, so they can be updated without touching logic.
+
+---
+
+**Task 1.2 — Filter pipeline generalisation in `frontend/parse_helpers.py`**
+
+Currently `_parse_lseg_excel()` does parsing and filtering in one pass against
+a file object. The scraper path provides pre-parsed rows and needs the filtering
+stage only.
+
+Extract the filter logic into a shared function:
+
+```python
+def _filter_announcement_rows(
+    rows: list[dict],
+    universe_tickers: set,
+    excluded_types: list[str],
+    company_keywords: list[str],
+    not_of_interest_tickers: set,
+) -> dict:  # same structure as _parse_lseg_excel() return value
+```
+
+Refactor `_parse_lseg_excel()` to call `_filter_announcement_rows()` internally.
+The public interface of `_parse_lseg_excel()` is unchanged — callers in `app.py`
+are unaffected.
+
+---
+
+**Task 1.3 — Ingest tab UI in `frontend/app.py`**
+
+Add a "Fetch from LSEG" button above the existing Excel uploader:
+
+```
+[ 🔄 Fetch from LSEG ]
+─────────────────────────────────────────
+or upload manually:  [ 📂 Upload Excel ]
+```
+
+On click:
+1. `with st.spinner("Fetching from LSEG (MCX · AXX · SMX · today)…"):`
+2. Call `fetch_announcement_index()` from `lseg_scraper.py`
+3. Call `_filter_announcement_rows()` with live Firestore config
+4. Store result in `st.session_state["ingest_result"]` (same key as Excel path)
+5. Clear session state keys (`ingest_dismissed`, `ingest_session_muted`,
+   `ingest_session_submitted`, `ingest_subform_open`) — same as new file upload
+6. `st.rerun()`
+
+On failure: display `st.error()` with the RuntimeError message. Excel upload
+remains available as fallback beneath the error.
+
+The result dict structure is identical to the Excel path — all downstream
+rendering code (table, filters, action buttons) works without modification.
+
+---
+
+### Acceptance criteria
+
+- "Fetch from LSEG" populates the Ingest table with the same rows that would
+  appear from an equivalent manual Excel export and upload
+- All existing filters apply identically (universe, trust keywords, muted
+  tickers, type exclusions)
+- Each scraped row carries a source_url — "✓ Analysed" indicator and
+  "Auto-fetch & submit" both work
+- Excel upload remains fully functional as a fallback
+- No changes required to any code downstream of `ingest_result` session state
 
 ---
 
