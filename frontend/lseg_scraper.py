@@ -36,19 +36,8 @@ _BODY_HOST_SELECTOR = 'div[itemprop="articleBody"]'
 # Class of the content div inside the shadow root
 _BODY_CONTENT_CLASS = "news-body-content"
 
-# LSEG News Explorer — bare URL, no filter params (for initial load test)
-_INDEX_BASE_URL = (
-    "https://www.londonstockexchange.com/news"
-    "?tab=news-explorer&indices="
-)
-
-# Individual index codes
-_INDEX_MCX = "MCX"   # FTSE 250
-_INDEX_AXX = "AXX"   # FTSE AIM All-Share
-_INDEX_SMX = "SMX"   # FTSE Small Cap
-
-# Bare test URL — no filters, no period; confirms tr.slide-panel selector works
-_INDEX_TEST_URL = "https://www.londonstockexchange.com/news?tab=news-explorer"
+# LSEG News Explorer — no filter params; date filtering done in Python
+_INDEX_URL = "https://www.londonstockexchange.com/news?tab=news-explorer"
 
 # Angular ng-select pagination dropdown on the index page
 _PAGINATION_SELECTOR = "#dropdownSize"
@@ -109,22 +98,21 @@ def fetch_announcement_body(url: str) -> str:
         return text
 
 
-def fetch_announcement_index(indices: str = _INDEX_MCX) -> list:
+def fetch_announcement_index() -> list:
     """
-    Fetch today's announcements from the LSEG News Explorer for a single index code.
+    Fetch today's announcements from the LSEG News Explorer.
 
-    indices: one of _INDEX_MCX ('MCX'), _INDEX_AXX ('AXX'), _INDEX_SMX ('SMX').
-    Call three times and concatenate to cover all three indices — combining them
-    in a single URL occasionally returns zero results from LSEG.
+    Navigates to the bare News Explorer URL (no filter params — Angular filter
+    state is unreliable in headless mode). Expands pagination to 500, scrapes
+    all rows, then filters to today's date in Python.
 
-    Handles the private investor challenge gate automatically.
-    Expands pagination to 500 rows before scraping.
+    Universe/source/type filtering is handled downstream by _filter_announcement_rows().
 
     Returns a list of row dicts with keys:
         ticker, company_name, announcement_type, source,
         source_url, published_at, price_pence, price_change_pct
     """
-    url = _INDEX_TEST_URL  # TODO: restore filter URL once selector mechanism confirmed
+    url = _INDEX_URL
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         storage_state = str(_COOKIES_PATH) if _COOKIES_PATH.exists() else None
@@ -142,6 +130,9 @@ def fetch_announcement_index(indices: str = _INDEX_MCX) -> list:
             context.close()
             browser.close()
 
+        today = datetime.now(timezone.utc).date()
+        rows = [r for r in rows if r["published_at"].date() == today]
+        print(f"[lseg_scraper] {len(rows)} rows after today filter", flush=True)
         return rows
 
 
@@ -227,7 +218,7 @@ def _scrape_index(page) -> list:
     print(f"[lseg_scraper] {_ROW_SELECTOR} found — expanding to 500", flush=True)
     _expand_to_500(page)
     rows = _extract_index_rows(page)
-    print(f"[lseg_scraper] extracted {len(rows)} rows", flush=True)
+    print(f"[lseg_scraper] extracted {len(rows)} rows before date filter", flush=True)
     return rows
 
 
