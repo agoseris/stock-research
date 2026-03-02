@@ -1,6 +1,6 @@
 # ROADMAP.md
 **Last updated:** 2 March 2026
-**Current version:** 2.19
+**Current version:** 2.31
 
 ---
 
@@ -12,196 +12,38 @@ operational and accumulating signal data.
 
 ---
 
-## Phase 1 — Automation: LSEG Index Page Scraping
+## Phase 1 — Automation: LSEG Index Page Scraping ✅ COMPLETE (v2.31)
 
 **Goal:** Eliminate the manual Excel export step. The Ingest table auto-populates
-from LSEG directly via Playwright. One button click replaces the current
-Export → Upload workflow.
+from LSEG directly via Playwright.
 
-**Current state:** Body retrieval and auto-submit are complete (v2.16–2.18). The
-remaining gap is scraping the LSEG announcement index.
+**Delivered:** v2.20–2.31 (2 March 2026)
 
-**Dependencies:** None — independent of all other phases.
+**Confirmed figures (2 Mar 2026):** 471 total rows · 83 non-RNS skipped · 54 passed ·
+200 non-universe skipped · 134 suppressed.
 
----
+### Implementation notes
 
-### Confirmed technical behaviour
-
-**URL (single, covers all three indices):**
-```
-https://www.londonstockexchange.com/news?tab=news-explorer&indices=MCX,AXX,SMX&period=today
-```
-`MCX` = FTSE 250 · `AXX` = FTSE AIM All-Share · `SMX` = FTSE Small Cap
-
-**Period:** `&period=today` in the URL locks to today's announcements. If a
-different period is selected by the user, LSEG appends `&period=lastweek` or
-`&period=custom&beforedate=...&afterdate=...` — the parameter scheme is clean.
-
-**News Type filter:** defaults to "Show only Earnings, News & Reach" and is not
-encoded in the URL. Leave it at the default. The existing Filter 1 in the parse
-pipeline (source column check, drops non-RNS rows) handles any Reach/GNW content
-that comes through. No Playwright interaction needed for this filter.
-
-**Pagination:** dropdown at the top of the results table, alongside a sort
-dropdown. Defaults to 20 rows. Options: 20 / 50 / 100 / 500. Playwright selects
-"500" and waits for the count display (e.g. "254 results (showing 254)") to
-confirm the full set is loaded before scraping.
-
-**Sort:** defaults to "most recent" — no interaction needed.
-
-**Source URLs:** confirmed present — each row carries a clickable link to the
-full announcement page. The "✓ Analysed" indicator and "Auto-fetch & submit"
-button both depend on this URL and will work correctly for scraped rows.
-
-**Challenge gate:** already handled by existing `lseg_scraper.py` logic
-(detects `body.block-scroll`, confirms private investor, saves cookies). The
-same mechanism covers the index page.
-
-**Source type column:** confirmed present. Values observed: RNS (dominant), PRN,
-MFN, BZN, Reach, GNW, EQS. Filter 1 (`source == "RNS"`) works identically on
-scraped rows — non-RNS rows route to suppressed as normal.
-
----
-
-### Playwright interaction sequence
-
-```
-1. Navigate to URL (with challenge gate handling)
-2. Wait for results table to appear
-3. Click pagination dropdown → select "500"
-4. Wait for count display to update (confirm full result set loaded)
-5. Scrape all visible rows
-6. Return list of row dicts
-```
-
-No filter interactions required. Sorting is already correct. One page load,
-one dropdown interaction, one scrape pass.
-
----
-
-### Delivery tasks
-
-**Task 1.0 — DOM reconnaissance ✅ COMPLETE**
-
-Confirmed selectors:
-
-| Element | Selector | Notes |
-|---------|----------|-------|
-| Each row | `tr.slide-panel` | Confirmed: 196 rows = 196 results |
-| Company + ticker | `td.news-title` first text node | e.g. "Nexus Infrastructure PLC - NEXS - " — split on " - " |
-| Announcement type | `td.news-title a.dash-link` inner text | e.g. "Director Dealing" |
-| Source URL | `td.news-title a.dash-link` href | Relative — prepend `https://www.londonstockexchange.com/` |
-| Source type | `td.hide-on-portrait.rns-source` | e.g. "RNS", "Reach", "GNW" |
-| Date | `td.hide-on-portrait:not(.rns-source)` index 0 | Format: `DD.MM.YY` |
-| Time | `td.hide-on-portrait:not(.rns-source)` index 1 | Format: `HH:MM:SS` |
-| Price | `td.hide-on-portrait:not(.rns-source)` index 2 | Numeric string or "-" |
-| Price change | `td.hide-on-portrait:not(.rns-source)` index 3 | String e.g. "1.59%" or "-" |
-| Pagination dropdown | `#dropdownSize` | Angular ng-select — click to open, then click option by text |
-| Pagination option | `.ng-option:has-text("Show 500 news")` | Text match inside the open dropdown panel |
-| Results count | `span.total-results` | Used as wait condition; matches row count |
-
-Desktop layout (`hide-on-portrait` columns) is used for all fields — cleaner
-than the mobile `.show-on-portrait` equivalent. Headless Playwright uses a
-desktop viewport by default so these columns are always present.
-
-`_ngcontent-ng-lseg-c*` attributes are Angular encapsulation IDs that change
-between deploys — never include in selectors.
-
-Output: a short note (can be added directly to this section) with the selectors.
-These are needed before Task 1.1 can be coded.
-
----
-
-**Task 1.1 — `fetch_announcement_index()` in `frontend/lseg_scraper.py` ✅ COMPLETE**
-
-New function alongside the existing `fetch_announcement_body()`:
-
-```python
-def fetch_announcement_index() -> list[dict]:
-    """
-    Scrape the LSEG News Explorer (MCX + AXX + SMX, today).
-    Returns a list of row dicts:
-      ticker, company_name, announcement_type, source, published_at,
-      price_pence, price_change_pct, source_url
-    'source' is 'RNS' if not extractable from the table, else the actual value.
-    Raises RuntimeError on failure.
-    """
-```
-
-Internal steps:
-1. Navigate to the confirmed URL
-2. Handle challenge gate (existing mechanism)
-3. Wait for results table to appear
-4. Click pagination dropdown, select "500"; wait for count display to confirm
-5. Scrape all visible rows into list of dicts
-6. Return list
-
-The URL and selectors are stored as module-level constants in `lseg_scraper.py`,
-not hardcoded inline, so they can be updated without touching logic.
-
----
-
-**Task 1.2 — Filter pipeline generalisation in `frontend/parse_helpers.py` ✅ COMPLETE**
-
-Currently `_parse_lseg_excel()` does parsing and filtering in one pass against
-a file object. The scraper path provides pre-parsed rows and needs the filtering
-stage only.
-
-Extract the filter logic into a shared function:
-
-```python
-def _filter_announcement_rows(
-    rows: list[dict],
-    universe_tickers: set,
-    excluded_types: list[str],
-    company_keywords: list[str],
-    not_of_interest_tickers: set,
-) -> dict:  # same structure as _parse_lseg_excel() return value
-```
-
-Refactor `_parse_lseg_excel()` to call `_filter_announcement_rows()` internally.
-The public interface of `_parse_lseg_excel()` is unchanged — callers in `app.py`
-are unaffected.
-
----
-
-**Task 1.3 — Ingest tab UI in `frontend/app.py` ✅ COMPLETE**
-
-Add a "Fetch from LSEG" button above the existing Excel uploader:
-
-```
-[ 🔄 Fetch from LSEG ]
-─────────────────────────────────────────
-or upload manually:  [ 📂 Upload Excel ]
-```
-
-On click:
-1. `with st.spinner("Fetching from LSEG (MCX · AXX · SMX · today)…"):`
-2. Call `fetch_announcement_index()` from `lseg_scraper.py`
-3. Call `_filter_announcement_rows()` with live Firestore config
-4. Store result in `st.session_state["ingest_result"]` (same key as Excel path)
-5. Clear session state keys (`ingest_dismissed`, `ingest_session_muted`,
-   `ingest_session_submitted`, `ingest_subform_open`) — same as new file upload
-6. `st.rerun()`
-
-On failure: display `st.error()` with the RuntimeError message. Excel upload
-remains available as fallback beneath the error.
-
-The result dict structure is identical to the Excel path — all downstream
-rendering code (table, filters, action buttons) works without modification.
-
----
-
-### Acceptance criteria
-
-- "Fetch from LSEG" populates the Ingest table with the same rows that would
-  appear from an equivalent manual Excel export and upload
-- All existing filters apply identically (universe, trust keywords, muted
-  tickers, type exclusions)
-- Each scraped row carries a source_url — "✓ Analysed" indicator and
-  "Auto-fetch & submit" both work
-- Excel upload remains fully functional as a fallback
-- No changes required to any code downstream of `ingest_result` session state
+- **URL:** bare `https://www.londonstockexchange.com/news?tab=news-explorer` — no
+  filter params. Angular URL filter params (`?indices=MCX&period=today`) cause "no
+  results" in headless mode; date and index filtering is done in Python instead.
+- **Pagination:** `#dropdownSize` ng-select; wait for `.ng-dropdown-panel` to render,
+  click `.ng-dropdown-panel .ng-option` matching "500", wait for `tr.slide-panel`
+  count > 20.
+- **Row extraction:** single JS `evaluate()` over all `tr.slide-panel` elements;
+  parses company/ticker/type from headline text, source URL from `a.dash-link` href.
+- **Date filter:** `published_at.date() == datetime.now(UTC).date()` applied in Python
+  after scraping — handles the bare URL returning all-time news.
+- **Non-universe rows:** route to internal `discovery` list (hidden from table);
+  metric label is "Non-universe (skipped)" — no intelligent candidate selection is
+  performed. The Discovery pipeline for this use case does not yet exist.
+- **Excel upload** retained as fallback.
+- **Ingest UX improvements also delivered:**
+  - Default outcome filter → "Passed" only
+  - "Since" time-window selector (All today / Last 4h / Last 2h / Last 1h / Last 30m)
+  - "Hide already analysed" checkbox (default ON) — excludes rows in `_get_processed_source_urls`
+  - Observability: `[lseg_scraper]` print statements (flush=True) to `logs/streamlit.log`;
+    screenshot saved to `frontend/debug_screenshot.png` on `tr.slide-panel` timeout
 
 ---
 
@@ -418,7 +260,10 @@ Phase 7 (Lens 5: Convergence) ────────────────�
 
 ## Next Actions
 
-1. **Phase 1** — extend `frontend/lseg_scraper.py` with `fetch_announcement_index()`
-2. **Phase 2a** — design and write Firestore schema migration for signal/position state
-3. **Phase 3** — manual validation of 10–20 Director/PDMR Dealing signals before building
-   (use LSEG web interface or directordeals.co.uk; check 30/60/90-day price outcomes)
+1. **Phase 2a** — Firestore schema for signal/position state (two-axis model)
+2. **Phase 3** — manual validation of 10–20 Director/PDMR Dealing signals before building
+   (use directordeals.co.uk; check 30/60/90-day price outcomes)
+3. **Automated ingestion** (future) — hourly fetch 07:00–19:00, auto-submit all Passed
+   rows, remove human from the loop. Prerequisite: Phase 2 state model (to avoid
+   re-submitting already-analysed announcements). The "Hide already analysed" filter
+   and `_get_processed_source_urls` deduplication are the building blocks.
