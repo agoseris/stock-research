@@ -8,6 +8,13 @@ from companies_house_connector import CompaniesHouseProvider
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
 from storage_firestore import FirestoreProvider
+from signal_state import (
+    classify_signal_strength,
+    is_negative_signal,
+    extract_confidence,
+    compute_signal_transition,
+    compute_decay_transitions,
+)
 
 
 class AnalysisPipeline:
@@ -45,6 +52,7 @@ class AnalysisPipeline:
         self.llm = GeminiProvider()
         self.notifier = TelegramNotifier()
         self.storage = storage or FirestoreProvider()
+        self.universe_storage = universe_storage
 
         # Load the active universe at startup.
         # Primary source: Firestore via UniverseStorageProviderBase.
@@ -166,6 +174,78 @@ REASON: [one sentence]"""
 
         return {}
 
+    def _run_decay_check(self, now: datetime) -> None:
+        """
+        Apply automatic decay transitions for companies whose confirmation window
+        has expired. Runs once at the end of each pipeline run.
+        """
+        if not self.universe_storage:
+            return
+        try:
+            config = self.universe_storage.get_signal_config()
+            all_companies = self.universe_storage.get_universe()
+            decayed = compute_decay_transitions(all_companies, config, now)
+            if decayed:
+                print(f"\n--- SIGNAL DECAY ({len(decayed)} companies) ---")
+                for ticker, old_state, new_state in decayed:
+                    self.universe_storage.update_signal_state(ticker, new_state, now)
+                    self.universe_storage.record_signal_transition(ticker, {
+                        "timestamp": now,
+                        "previous_state": old_state,
+                        "new_state": new_state,
+                        "trigger_source_url": "",
+                        "trigger_headline": "Automatic decay — confirmation window expired",
+                        "lens": "system",
+                        "signal_strength": "decay",
+                        "llm_confidence": "",
+                    })
+                    print(f"  [{ticker}] {old_state} → {new_state} (decay)")
+        except Exception as e:
+            print(f"  Decay check error: {e}")
+
+    def _apply_state_transition(
+        self, announcement: "Announcement", lens, result: dict, now: datetime
+    ) -> None:
+        """
+        Classify the LLM result, compute the state transition for the ticker,
+        and persist the new state + history record to universe_storage.
+        No-ops if universe_storage is unavailable.
+        """
+        if not self.universe_storage:
+            return
+        ticker = announcement.ticker
+        try:
+            strength = classify_signal_strength(result["llm_analysis"])
+            is_neg = is_negative_signal(result["llm_analysis"])
+
+            company = self.universe_storage.get_company(ticker)
+            current_state = company.signal_state if company else None
+            normalised_current = current_state or "watching"
+
+            new_state = compute_signal_transition(current_state, strength, is_neg)
+
+            if new_state is not None and new_state != normalised_current:
+                self.universe_storage.update_signal_state(ticker, new_state, now)
+                self.universe_storage.record_signal_transition(ticker, {
+                    "timestamp": now,
+                    "previous_state": normalised_current,
+                    "new_state": new_state,
+                    "trigger_source_url": announcement.source_url,
+                    "trigger_headline": announcement.headline,
+                    "lens": lens.name,
+                    "signal_strength": strength,
+                    "llm_confidence": extract_confidence(result["llm_analysis"]),
+                })
+                print(f"  [{ticker}] State: {normalised_current} → {new_state} "
+                      f"({strength}{'  [neg]' if is_neg else ''})")
+            else:
+                # No state change — touch last_signal_at only
+                self.universe_storage.update_signal_state(
+                    ticker, normalised_current, now, update_since=False
+                )
+        except Exception as e:
+            print(f"  [{ticker}] State transition error: {e}")
+
     def run(self, max_announcements: int = 50) -> Tuple[List[dict], List[dict]]:
         """
         Full pipeline run.
@@ -173,8 +253,9 @@ REASON: [one sentence]"""
         """
         signal_results = []
         discovery_results = []
+        now = datetime.now(timezone.utc)
         print(f"\n{'='*60}")
-        print(f"Pipeline run started: {datetime.now(timezone.utc)}")
+        print(f"Pipeline run started: {now}")
         print(f"{'='*60}\n")
 
         # Step 1: Ingest from all providers
@@ -267,6 +348,7 @@ REASON: [one sentence]"""
                 }
                 signal_results.append(result)
                 self.storage.save_signal_result(result)
+                self._apply_state_transition(announcement, lens, result, now)
                 print(f"\n  {'─'*50}")
                 print(f"  [{announcement.ticker}] {announcement.company_name}")
                 print(f"  {announcement.headline}")
@@ -303,6 +385,9 @@ REASON: [one sentence]"""
                 print(f"  DISCOVERY: {announcement.headline[:60]}")
                 print(f"  {'─'*50}")
                 print(result["discovery_assessment"])
+
+        # Decay check — run once at end of each pipeline run
+        self._run_decay_check(now)
 
         # Summary
         print(f"\n{'='*60}")

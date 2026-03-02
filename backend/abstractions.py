@@ -140,6 +140,12 @@ class StorageProviderBase(ABC):
 class StrategyLensBase(ABC):
     """Abstract base for all investment strategy lenses."""
 
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Short identifier for this lens, e.g. 'regulatory_catalyst'."""
+        pass
+
     @abstractmethod
     def pre_filter(self, announcement: Announcement) -> bool:
         """Returns True if this announcement warrants LLM analysis."""
@@ -194,6 +200,15 @@ class UniverseCompany:
     companies_house_number: Optional[str] = None
     companies_house_confidence: Optional[float] = None
     not_of_interest: bool = False
+
+    # Signal state (system-managed)
+    signal_state: Optional[str] = None           # watching/monitor/signal_active/signal_reinforced/signal_mixed/signal_negative
+    signal_state_since: Optional[datetime] = None
+    last_signal_at: Optional[datetime] = None    # most recent signal of any kind — for confirmation windows
+
+    # Position state (human-managed)
+    position_state: Optional[str] = None         # acted/deferred/declined/closed (None = no position)
+    position_state_since: Optional[datetime] = None
 
 
 @dataclass
@@ -341,4 +356,74 @@ class UniverseStorageProviderBase(ABC):
     @abstractmethod
     def save_company(self, company: UniverseCompany) -> None:
         """Upsert a single company without affecting other universe documents."""
+        pass
+
+    # --- Signal / position state ---
+
+    @abstractmethod
+    def update_signal_state(
+        self,
+        ticker_lse: str,
+        new_state: str,
+        timestamp: "datetime",
+        update_since: bool = True,
+    ) -> None:
+        """
+        Merge-update signal_state and last_signal_at on a company doc.
+        If update_since is True (default), also updates signal_state_since.
+        Use update_since=False when touching last_signal_at without a state change.
+        """
+        pass
+
+    @abstractmethod
+    def update_position_state(
+        self, ticker_lse: str, new_state: str, timestamp: "datetime"
+    ) -> None:
+        """Merge-update position_state and position_state_since on a company doc."""
+        pass
+
+    @abstractmethod
+    def record_signal_transition(self, ticker_lse: str, transition: dict) -> None:
+        """
+        Append a signal state transition record to
+        universe_companies/{ticker}/signal_history (auto-ID document).
+        """
+        pass
+
+    @abstractmethod
+    def record_position_transition(self, ticker_lse: str, transition: dict) -> None:
+        """
+        Append a position state change record to
+        universe_companies/{ticker}/position_history (auto-ID document).
+        """
+        pass
+
+    @abstractmethod
+    def get_signal_history(
+        self, ticker_lse: str, limit: int = 50
+    ) -> List[dict]:
+        """Return signal history for a company, most recent first."""
+        pass
+
+    @abstractmethod
+    def get_position_history(
+        self, ticker_lse: str, limit: int = 50
+    ) -> List[dict]:
+        """Return position history for a company, most recent first."""
+        pass
+
+    @abstractmethod
+    def get_decayed_companies(self, decay_config: dict) -> List[UniverseCompany]:
+        """
+        Return companies whose signal_state has been in its current state
+        longer than the configured decay window.
+        """
+        pass
+
+    @abstractmethod
+    def get_signal_config(self) -> dict:
+        """
+        Return signal state configuration from app_config/signal_config.
+        Seeds default values in Firestore on first call.
+        """
         pass

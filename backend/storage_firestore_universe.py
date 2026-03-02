@@ -29,6 +29,16 @@ from abstractions import RefreshLog, UniverseCompany, UniverseStorageProviderBas
 
 load_dotenv()
 
+_DEFAULT_SIGNAL_CONFIG = {
+    "monitor_decay_days": 30,
+    "active_confirmation_window_days": 90,
+    "reinforced_staleness_days": 180,
+    "mixed_resolution_days": 30,
+    "negative_decay_days": 90,
+    "deferred_nudge_days": 60,
+    "deferred_decay_days": 14,
+}
+
 
 class FirestoreUniverseProvider(UniverseStorageProviderBase):
     """
@@ -80,6 +90,21 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             "companies_house_number": company.companies_house_number,
             "companies_house_confidence": company.companies_house_confidence,
             "not_of_interest": company.not_of_interest,
+            # Signal / position state
+            "signal_state": company.signal_state,
+            "signal_state_since": (
+                company.signal_state_since.isoformat()
+                if company.signal_state_since else None
+            ),
+            "last_signal_at": (
+                company.last_signal_at.isoformat()
+                if company.last_signal_at else None
+            ),
+            "position_state": company.position_state,
+            "position_state_since": (
+                company.position_state_since.isoformat()
+                if company.position_state_since else None
+            ),
         }
 
     def _dict_to_company(self, data: dict) -> UniverseCompany:
@@ -94,6 +119,13 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
         def _parse_datetime(v):
             if v is None:
                 return datetime.now(timezone.utc)
+            if isinstance(v, datetime):
+                return v
+            return datetime.fromisoformat(v)
+
+        def _parse_optional_datetime(v):
+            if v is None:
+                return None
             if isinstance(v, datetime):
                 return v
             return datetime.fromisoformat(v)
@@ -122,6 +154,11 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             companies_house_number=data.get("companies_house_number"),
             companies_house_confidence=data.get("companies_house_confidence"),
             not_of_interest=data.get("not_of_interest", False),
+            signal_state=data.get("signal_state"),
+            signal_state_since=_parse_optional_datetime(data.get("signal_state_since")),
+            last_signal_at=_parse_optional_datetime(data.get("last_signal_at")),
+            position_state=data.get("position_state"),
+            position_state_since=_parse_optional_datetime(data.get("position_state_since")),
         )
 
     def _log_to_dict(self, log: RefreshLog) -> dict:
@@ -257,6 +294,172 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             ).set(self._company_to_dict(company))
         except Exception as e:
             print(f"  [FirestoreUniverse] save_company({company.ticker_lse}) failed: {e}")
+
+    # --- Signal / position state ---
+
+    def update_signal_state(
+        self,
+        ticker_lse: str,
+        new_state: str,
+        timestamp: datetime,
+        update_since: bool = True,
+    ) -> None:
+        """
+        Merge-update signal_state and last_signal_at on the company doc.
+        When update_since=True (default), also updates signal_state_since.
+        """
+        try:
+            update = {
+                "signal_state": new_state,
+                "last_signal_at": timestamp.isoformat(),
+            }
+            if update_since:
+                update["signal_state_since"] = timestamp.isoformat()
+            self.db.collection(self.UNIVERSE_COLLECTION).document(ticker_lse).set(
+                update, merge=True
+            )
+        except Exception as e:
+            print(f"  [FirestoreUniverse] update_signal_state({ticker_lse}) failed: {e}")
+
+    def update_position_state(
+        self, ticker_lse: str, new_state: str, timestamp: datetime
+    ) -> None:
+        """Merge-update position_state and position_state_since on the company doc."""
+        try:
+            self.db.collection(self.UNIVERSE_COLLECTION).document(ticker_lse).set(
+                {
+                    "position_state": new_state,
+                    "position_state_since": timestamp.isoformat(),
+                },
+                merge=True,
+            )
+        except Exception as e:
+            print(f"  [FirestoreUniverse] update_position_state({ticker_lse}) failed: {e}")
+
+    def record_signal_transition(self, ticker_lse: str, transition: dict) -> None:
+        """Append a signal_history document under universe_companies/{ticker}."""
+        try:
+            # Serialise datetime → ISO string so Firestore stores consistently
+            doc = {
+                k: (v.isoformat() if isinstance(v, datetime) else v)
+                for k, v in transition.items()
+            }
+            (
+                self.db.collection(self.UNIVERSE_COLLECTION)
+                .document(ticker_lse)
+                .collection("signal_history")
+                .add(doc)
+            )
+        except Exception as e:
+            print(f"  [FirestoreUniverse] record_signal_transition({ticker_lse}) failed: {e}")
+
+    def record_position_transition(self, ticker_lse: str, transition: dict) -> None:
+        """Append a position_history document under universe_companies/{ticker}."""
+        try:
+            doc = {
+                k: (v.isoformat() if isinstance(v, datetime) else v)
+                for k, v in transition.items()
+            }
+            (
+                self.db.collection(self.UNIVERSE_COLLECTION)
+                .document(ticker_lse)
+                .collection("position_history")
+                .add(doc)
+            )
+        except Exception as e:
+            print(f"  [FirestoreUniverse] record_position_transition({ticker_lse}) failed: {e}")
+
+    def get_signal_history(
+        self, ticker_lse: str, limit: int = 50
+    ) -> List[dict]:
+        """Return signal history for a company, most recent first."""
+        try:
+            docs = (
+                self.db.collection(self.UNIVERSE_COLLECTION)
+                .document(ticker_lse)
+                .collection("signal_history")
+                .order_by("timestamp", direction=firestore.Query.DESCENDING)
+                .limit(limit)
+                .stream()
+            )
+            return [doc.to_dict() for doc in docs]
+        except Exception as e:
+            print(f"  [FirestoreUniverse] get_signal_history({ticker_lse}) failed: {e}")
+            return []
+
+    def get_position_history(
+        self, ticker_lse: str, limit: int = 50
+    ) -> List[dict]:
+        """Return position history for a company, most recent first."""
+        try:
+            docs = (
+                self.db.collection(self.UNIVERSE_COLLECTION)
+                .document(ticker_lse)
+                .collection("position_history")
+                .order_by("timestamp", direction=firestore.Query.DESCENDING)
+                .limit(limit)
+                .stream()
+            )
+            return [doc.to_dict() for doc in docs]
+        except Exception as e:
+            print(f"  [FirestoreUniverse] get_position_history({ticker_lse}) failed: {e}")
+            return []
+
+    def get_decayed_companies(self, decay_config: dict) -> List[UniverseCompany]:
+        """
+        Return companies whose signal_state has been in its current state
+        longer than the decay window in decay_config.
+
+        Loads the full universe in Python and filters — no composite index needed.
+        """
+        # Decay windows: state → config key
+        _STATE_DECAY_KEY = {
+            "monitor": "monitor_decay_days",
+            "signal_active": "active_confirmation_window_days",
+            "signal_reinforced": "reinforced_staleness_days",
+            "signal_mixed": "mixed_resolution_days",
+            "signal_negative": "negative_decay_days",
+        }
+        try:
+            companies = self.get_universe()
+            now = datetime.now(timezone.utc)
+            decayed = []
+            for company in companies:
+                state = company.signal_state
+                config_key = _STATE_DECAY_KEY.get(state)
+                if config_key is None:
+                    continue
+                days = decay_config.get(config_key, 0)
+                if days <= 0 or company.signal_state_since is None:
+                    continue
+                since = company.signal_state_since
+                if since.tzinfo is None:
+                    since = since.replace(tzinfo=timezone.utc)
+                if (now - since).days >= days:
+                    decayed.append(company)
+            return decayed
+        except Exception as e:
+            print(f"  [FirestoreUniverse] get_decayed_companies failed: {e}")
+            return []
+
+    def get_signal_config(self) -> dict:
+        """
+        Return signal state configuration from app_config/signal_config.
+        Seeds default values in Firestore on first call.
+        """
+        try:
+            doc = self.db.collection("app_config").document("signal_config").get()
+            if doc.exists:
+                # Merge stored values over defaults so new keys are picked up
+                return {**_DEFAULT_SIGNAL_CONFIG, **doc.to_dict()}
+            # First call — seed defaults
+            self.db.collection("app_config").document("signal_config").set(
+                _DEFAULT_SIGNAL_CONFIG, merge=True
+            )
+            return dict(_DEFAULT_SIGNAL_CONFIG)
+        except Exception as e:
+            print(f"  [FirestoreUniverse] get_signal_config failed: {e}")
+            return dict(_DEFAULT_SIGNAL_CONFIG)
 
     # --- Refresh log ---
 

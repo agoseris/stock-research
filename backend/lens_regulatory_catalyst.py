@@ -22,6 +22,10 @@ class RegulatoryCatalystLens(StrategyLensBase):
     this lens only contains what is specific to the regulatory catalyst strategy.
     """
 
+    @property
+    def name(self) -> str:
+        return "regulatory_catalyst"
+
     # Keywords specific to the regulatory and planning catalyst strategy.
     # At least one must be present after the universe filter passes.
     POSITIVE_SIGNALS = [

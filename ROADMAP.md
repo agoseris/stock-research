@@ -1,6 +1,6 @@
 # ROADMAP.md
 **Last updated:** 2 March 2026
-**Current version:** 2.31
+**Current version:** 2.31 (no frontend change for Phase 2a/2b)
 
 ---
 
@@ -37,6 +37,14 @@ from LSEG directly via Playwright.
 - **Non-universe rows:** route to internal `discovery` list (hidden from table);
   metric label is "Non-universe (skipped)" — no intelligent candidate selection is
   performed. The Discovery pipeline for this use case does not yet exist.
+- **Index params:** bare URL used initially because `?indices=MCX&period=today`
+  gave "no results" headless — the `&period=today` param was the culprit, not MCX
+  itself. Three targeted fetches replace the single bare-URL fetch:
+  `MCX` (FTSE 250), `SMX` (FTSE Small Cap), `AXX` (FTSE AIM All-Share).
+  Each stays well under 500 rows/day; results merged and deduplicated on
+  `source_url`. SMX has no UI selector in the Index filter (URL param only);
+  MCX and AXX have in-page selectors (`div.mcx-button` / `div.axx-button`)
+  as fallback behind the `div.index-button` toggle.
 - **Excel upload** retained as fallback.
 - **Ingest UX improvements also delivered:**
   - Default outcome filter → "Passed" only
@@ -53,52 +61,54 @@ from LSEG directly via Playwright.
 pipeline and dashboard. This is the prerequisite for signals to accumulate meaning
 over time.
 
-**Current state:** Model fully designed in `LENS_WORKSHOP_CANDIDATES_v2.md` (Part A).
-No Firestore schema or code exists yet.
+### 2a — Firestore schema ✅ COMPLETE (2 March 2026)
 
-### 2a — Firestore schema
+`UniverseCompany` dataclass carries five new Optional fields (backwards-compatible):
+`signal_state`, `signal_state_since`, `last_signal_at`, `position_state`,
+`position_state_since`.
 
-Add fields to each `universe_companies` document:
-- `signal_state` — one of: `watching`, `monitor`, `signal_active`,
-  `signal_reinforced`, `signal_mixed`, `signal_negative`
-- `signal_state_updated_at` — timestamp of last transition
-- `position_state` — one of: `acted`, `deferred`, `declined`, `closed`, or absent
-- `position_state_updated_at`
+Subcollections per company document:
+- `universe_companies/{ticker}/signal_history/{auto-id}` — one doc per state
+  transition (timestamp, previous_state, new_state, trigger_source_url,
+  trigger_headline, lens, signal_strength, llm_confidence)
+- `universe_companies/{ticker}/position_history/{auto-id}` — one doc per
+  position state change
 
-Add subcollection `signal_history` under each company document:
-- One document per state transition: timestamp, previous state, new state,
-  triggering announcement (source_url, headline), lens, LLM confidence score
+`app_config/signal_config` config document seeded on first call (all decay window
+defaults encoded in `_DEFAULT_SIGNAL_CONFIG` in `storage_firestore_universe.py`).
 
-Add `position_history` subcollection:
-- One document per position state change: timestamp, previous state, new state,
-  optional user reason
+`UniverseStorageProviderBase` gains 8 new abstract methods; all implemented in
+`FirestoreUniverseProvider`. `StrategyLensBase` gains abstract `name` property.
 
-Add confirmation window config to `app_config` collection (document
-`signal_config`):
-- `monitor_decay_days` (default 30)
-- `active_confirmation_window_days` (default 90)
-- `reinforced_staleness_days` (default 180)
-- `mixed_resolution_days` (default 30)
-- `negative_decay_days` (default 90)
-- `deferred_nudge_days` (default 60)
-- `deferred_decay_days` (default 14)
+### 2b — Pipeline integration ✅ COMPLETE (2 March 2026)
 
-### 2b — Pipeline integration
+`backend/signal_state.py` — new pure module (no Firestore imports):
+- `classify_signal_strength`, `is_negative_signal`, `extract_confidence`
+- `compute_signal_transition(current_state, strength, is_negative)` → new state
+- `compute_decay_transitions(companies, config, now)` → [(ticker, old, new)]
+- `TRANSITION_TABLE`, `DECAY_RULES` constants
+- 29/29 self-tests pass (`python signal_state.py`)
 
-In `pipeline.py`, after each LLM analysis result is stored:
-- Apply state transition logic based on signal confidence and direction
-- Write new state + history entry to Firestore
-- Apply decay checks on every run: query companies whose signal state has exceeded
-  its confirmation window and apply the appropriate decay transition
+`pipeline.py` wiring:
+- `self.universe_storage` stored as instance attribute
+- `_apply_state_transition` called after every `save_signal_result`
+- `_run_decay_check` runs at end of each autonomous pipeline run
 
-### 2c — Dashboard integration
+`job_runner.py` wiring:
+- Same `_apply_state_transition` method called after `save_signal_result`
+- `"lens"` key added to signal result dict (flows into signal_history records)
+
+`RegulatoryCatalystLens.name = "regulatory_catalyst"`.
+
+### 2c — Dashboard integration ⬜ NOT STARTED
 
 In `frontend/app.py`, Signals tab:
 - Show `signal_state` badge alongside each signal result
 - Add position state controls (Acted / Deferred / Declined) to each signal card
+- Signal history expander per company
 - Notification priority matrix: surface Acted + Negative signals at maximum urgency
 
-**Dependencies:** None — can proceed in parallel with Phase 1 and Phase 3.
+**Dependencies:** 2a + 2b complete ✅ — 2c can proceed immediately.
 
 ---
 
@@ -242,17 +252,19 @@ Not scheduled. Triggered by demonstrated need, not assumption (free-first princi
 ## Dependency Summary
 
 ```
-Phase 1 (Scraping) ─────────────────────────────────────────► standalone
+Phase 1 (Scraping) ─────────────────────────────────────────► ✅ COMPLETE (v2.31)
 
-Phase 2 (State Model) ──────────────────────────────────────► standalone
-    └─ blocks Phase 3–6 (state writes) but not lens logic development
+Phase 2 (State Model)
+    2a Schema ──────────────────────────────────────────────► ✅ COMPLETE (2 Mar 2026)
+    2b Pipeline integration ─────────────────────────────────► ✅ COMPLETE (2 Mar 2026)
+    2c Dashboard integration ────────────────────────────────► ⬜ next
 
-Phase 3 (Lens 1: Director Buying) ─────────────────────────► needs Phase 2a
+Phase 3 (Lens 1: Director Buying) ─────────────────────────► needs Phase 2a ✅
     └─ establishes lens implementation pattern for Phases 4–6
 
-Phase 4 (Lens 2: TR-1) ────────────────────────────────────► needs Phase 2a, 3
-Phase 5 (Lens 3: Placing Quality) ─────────────────────────► needs Phase 2a, 3
-Phase 6 (Lens 4: Buyback Momentum) ────────────────────────► needs Phase 2a, 3
+Phase 4 (Lens 2: TR-1) ────────────────────────────────────► needs Phase 2a ✅, 3
+Phase 5 (Lens 3: Placing Quality) ─────────────────────────► needs Phase 2a ✅, 3
+Phase 6 (Lens 4: Buyback Momentum) ────────────────────────► needs Phase 2a ✅, 3
 Phase 7 (Lens 5: Convergence) ─────────────────────────────► needs Phases 3 + 4 live ≥30 days
 ```
 
@@ -260,10 +272,10 @@ Phase 7 (Lens 5: Convergence) ────────────────�
 
 ## Next Actions
 
-1. **Phase 2a** — Firestore schema for signal/position state (two-axis model)
+1. **Phase 2c** — Dashboard integration: signal_state badges on Signals tab, position
+   state controls (Acted / Deferred / Declined), signal history expander
 2. **Phase 3** — manual validation of 10–20 Director/PDMR Dealing signals before building
-   (use directordeals.co.uk; check 30/60/90-day price outcomes)
+   (use directordeals.co.uk; check 30/60/90-day price outcomes). Phase 2a is now unblocked ✅.
 3. **Automated ingestion** (future) — hourly fetch 07:00–19:00, auto-submit all Passed
-   rows, remove human from the loop. Prerequisite: Phase 2 state model (to avoid
-   re-submitting already-analysed announcements). The "Hide already analysed" filter
-   and `_get_processed_source_urls` deduplication are the building blocks.
+   rows, remove human from the loop. The "Hide already analysed" filter and
+   `_get_processed_source_urls` deduplication are the building blocks.

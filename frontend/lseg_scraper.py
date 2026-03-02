@@ -8,12 +8,22 @@ Provides two public functions:
   fetch_announcement_index()    — today's rows from the LSEG News Explorer
 
 Notes on fetch_announcement_index():
-  - Navigates to the bare News Explorer URL (no filter params). Angular filter
-    state is unreliable in headless mode; date and index filtering is done in
-    Python instead.
-  - Expands pagination to 500 via the ng-select dropdown (#dropdownSize).
-  - Filters to today's UTC date before returning.
+  - Makes two separate fetches — one for FTSE Small Cap (SMX) and one for AIM
+    (AXX) — via URL index params confirmed to work in headless mode. This keeps
+    each fetch well under the 500-row pagination limit and guarantees complete
+    daily coverage for both market segments.
+  - The bare URL without params ("no filter") was the original approach when
+    index URL params were thought to be unreliable. MCX (tried early on) is not
+    a valid LSEG index code; SMX and AXX are valid and apply correctly.
+  - Results from both fetches are merged and deduplicated on source_url.
+  - Filtered to today's UTC date before returning.
   - Universe / source / type filtering handled downstream by _filter_announcement_rows().
+
+  In-page filter DOM reference (fallback if URL params ever stop working):
+    Index panel toggle:  div.index-button
+    MCX option button:   div.mcx-button   (FTSE 250 — has UI selector)
+    AXX option button:   div.axx-button   (FTSE AIM All-Share — has UI selector)
+    SMX has no UI selector; URL param only.
 
 Maintains a persistent browser cookie store so that the private investor
 challenge gate survives between calls. Cookie file: lseg_cookies.json
@@ -44,8 +54,17 @@ _BODY_HOST_SELECTOR = 'div[itemprop="articleBody"]'
 # Class of the content div inside the shadow root
 _BODY_CONTENT_CLASS = "news-body-content"
 
-# LSEG News Explorer — no filter params; date filtering done in Python
+# LSEG News Explorer base URL. Index param appended per fetch: &indices=SMX / &indices=AXX
 _INDEX_URL = "https://www.londonstockexchange.com/news?tab=news-explorer"
+
+# Index codes for the three market segments that make up the monitored universe.
+# MCX = FTSE 250         (Main Market mid/small — has UI selector in Index filter)
+# SMX = FTSE Small Cap   (Main Market small-cap — URL param only, no UI selector)
+# AXX = FTSE AIM All-Share (AIM — has UI selector in Index filter)
+# Note: MCX URL param previously appeared to fail, but that was caused by the
+# accompanying &period=today param, not MCX itself. AXX and MCX both have in-page
+# selector options (div.mcx-button / div.axx-button) as a fallback if needed.
+_TARGET_INDICES = ["MCX", "SMX", "AXX"]
 
 # Angular ng-select pagination dropdown on the index page
 _PAGINATION_SELECTOR = "#dropdownSize"
@@ -108,9 +127,10 @@ def fetch_announcement_index() -> list:
     """
     Fetch today's announcements from the LSEG News Explorer.
 
-    Navigates to the bare News Explorer URL (no filter params — Angular filter
-    state is unreliable in headless mode). Expands pagination to 500, scrapes
-    all rows, then filters to today's date in Python.
+    Makes three fetches — MCX (FTSE 250), SMX (FTSE Small Cap), AXX (FTSE AIM
+    All-Share) — so each stays well under the 500-row limit and the full
+    monitored universe is covered without truncation. Results are merged and
+    deduplicated on source_url before being returned.
 
     Universe/source/type filtering is handled downstream by _filter_announcement_rows().
 
@@ -118,28 +138,49 @@ def fetch_announcement_index() -> list:
         ticker, company_name, announcement_type, source,
         source_url, published_at, price_pence, price_change_pct
     """
-    url = _INDEX_URL
+    today = datetime.now(timezone.utc).date()
+    all_rows: list = []
+    seen_urls: set = set()
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        storage_state = str(_COOKIES_PATH) if _COOKIES_PATH.exists() else None
-        context = browser.new_context(
-            storage_state=storage_state,
-            user_agent=_USER_AGENT,
-        )
-        page = context.new_page()
 
-        try:
-            _load_page(page, url)
-            _handle_challenge_if_present(page, context)
-            rows = _scrape_index(page)
-        finally:
-            context.close()
-            browser.close()
+        for index in _TARGET_INDICES:
+            url = f"{_INDEX_URL}&indices={index}"
+            storage_state = str(_COOKIES_PATH) if _COOKIES_PATH.exists() else None
+            context = browser.new_context(
+                storage_state=storage_state,
+                user_agent=_USER_AGENT,
+            )
+            page = context.new_page()
+            try:
+                _load_page(page, url)
+                _handle_challenge_if_present(page, context)
+                rows = _scrape_index(page, label=index)
+                today_rows = [r for r in rows if r["published_at"].date() == today]
+                added = 0
+                for row in today_rows:
+                    url_key = row.get("source_url", "")
+                    if url_key and url_key in seen_urls:
+                        continue
+                    if url_key:
+                        seen_urls.add(url_key)
+                    all_rows.append(row)
+                    added += 1
+                print(
+                    f"[lseg_scraper] {index}: {len(rows)} scraped, "
+                    f"{len(today_rows)} today, {added} added (running total {len(all_rows)})",
+                    flush=True,
+                )
+            except Exception as e:
+                print(f"[lseg_scraper] {index}: fetch failed — {e}", flush=True)
+            finally:
+                context.close()
 
-        today = datetime.now(timezone.utc).date()
-        rows = [r for r in rows if r["published_at"].date() == today]
-        print(f"[lseg_scraper] {len(rows)} rows after today filter", flush=True)
-        return rows
+        browser.close()
+
+    print(f"[lseg_scraper] {len(all_rows)} rows total after dedup ({'+'.join(_TARGET_INDICES)})", flush=True)
+    return all_rows
 
 
 # ── Internal helpers ────────────────────────────────────────────────────────────
@@ -207,24 +248,25 @@ def _extract_body(page) -> str:
 
 # ── Index scraping helpers ───────────────────────────────────────────────────────
 
-def _scrape_index(page) -> list:
-    """Click Apply Filters, wait for results, expand pagination to 500, extract all rows."""
-    print(f"[lseg_scraper] index page url={page.url!r} title={page.title()!r}", flush=True)
+def _scrape_index(page, label: str = "") -> list:
+    """Wait for results, expand pagination to 500, extract all rows."""
+    tag = f"[lseg_scraper][{label}]" if label else "[lseg_scraper]"
+    print(f"{tag} url={page.url!r} title={page.title()!r}", flush=True)
     body_classes = page.locator("body").get_attribute("class") or ""
-    print(f"[lseg_scraper] body classes={body_classes!r}", flush=True)
+    print(f"{tag} body classes={body_classes!r}", flush=True)
 
     try:
         page.wait_for_selector(_ROW_SELECTOR, timeout=_ELEMENT_TIMEOUT)
     except PlaywrightTimeout:
         screenshot_path = str(Path(__file__).parent / "debug_screenshot.png")
         page.screenshot(path=screenshot_path, full_page=True)
-        print(f"[lseg_scraper] TIMEOUT waiting for {_ROW_SELECTOR!r} — screenshot saved to {screenshot_path}", flush=True)
+        print(f"{tag} TIMEOUT waiting for {_ROW_SELECTOR!r} — screenshot saved to {screenshot_path}", flush=True)
         return []  # No results available (e.g. outside market hours)
 
-    print(f"[lseg_scraper] {_ROW_SELECTOR} found — expanding to 500", flush=True)
+    print(f"{tag} {_ROW_SELECTOR} found — expanding to 500", flush=True)
     _expand_to_500(page)
     rows = _extract_index_rows(page)
-    print(f"[lseg_scraper] extracted {len(rows)} rows before date filter", flush=True)
+    print(f"{tag} extracted {len(rows)} rows", flush=True)
     return rows
 
 

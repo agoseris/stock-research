@@ -21,6 +21,52 @@ App running locally on WSL2 at `http://localhost:8501`.
 
 ---
 
+## Phase 2a/2b — Signal/Position State Model (2 March 2026)
+
+Backend implementation complete. No version bump (no frontend changes).
+
+### What was built
+
+**New file: `backend/signal_state.py`** — pure transition engine, no Firestore imports.
+- `classify_signal_strength(llm_analysis)` — parses RECOMMENDED_ACTION + CONFIDENCE_SIGNAL → `strong / moderate / weak / noise`
+- `is_negative_signal(llm_analysis)` — True when RECOMMENDED_ACTION is "no"
+- `compute_signal_transition(current_state, strength, is_negative)` → new state or None
+- `compute_decay_transitions(companies, config, now)` → `[(ticker, old_state, new_state)]`
+- `TRANSITION_TABLE` and `DECAY_RULES` constants — full transition matrix from workshop spec
+
+**Schema changes (backwards-compatible):**
+All new fields on `UniverseCompany` are `Optional` with `None` defaults. Existing Firestore documents load without error.
+
+| New field | Type | Managed by |
+|---|---|---|
+| `signal_state` | Optional[str] | System |
+| `signal_state_since` | Optional[datetime] | System |
+| `last_signal_at` | Optional[datetime] | System |
+| `position_state` | Optional[str] | Human |
+| `position_state_since` | Optional[datetime] | Human |
+
+**New Firestore subcollections** (under `universe_companies/{ticker}`):
+- `signal_history/{auto-id}` — one doc per state transition (timestamp, previous_state, new_state, trigger_source_url, trigger_headline, lens, signal_strength, llm_confidence)
+- `position_history/{auto-id}` — one doc per position state change
+
+**New Firestore config document:** `app_config/signal_config` — seeded on first call with default decay windows (monitor=30d, signal_active=90d, signal_reinforced=180d, signal_mixed=30d, signal_negative=90d).
+
+**New abstract methods on `UniverseStorageProviderBase`** (8 total):
+`update_signal_state`, `update_position_state`, `record_signal_transition`, `record_position_transition`, `get_signal_history`, `get_position_history`, `get_decayed_companies`, `get_signal_config`
+
+**`StrategyLensBase`** now has abstract `name` property. `RegulatoryCatalystLens.name = "regulatory_catalyst"`.
+
+**Pipeline wiring:**
+- `pipeline.py`: `_apply_state_transition` called after every `save_signal_result`; `_run_decay_check` runs at end of each autonomous pipeline run
+- `job_runner.py`: same `_apply_state_transition` wired after `save_signal_result` in `_process_job`; `"lens"` key added to signal result dict
+
+### Key design notes
+- `update_signal_state(ticker, state, timestamp, update_since=True)` — pass `update_since=False` when there is no state change, to touch `last_signal_at` without resetting `signal_state_since` (which would prevent decay)
+- `is_negative=True` overrides `signal_strength` in the transition lookup — any RECOMMENDED_ACTION: no verdict uses the `"negative"` row of the table regardless of classified strength
+- `signal_negative` is a terminal state: all incoming signals (positive or negative) produce no transition — the company must decay back to `watching` first
+
+---
+
 ## Pipeline Summary
 
 | Component | Status | Detail |

@@ -39,6 +39,12 @@ from import_universe_csv import _lookup_ch_number
 from google.cloud.firestore_v1.base_query import FieldFilter
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
+from signal_state import (
+    classify_signal_strength,
+    is_negative_signal,
+    extract_confidence,
+    compute_signal_transition,
+)
 from storage_firestore import FirestoreProvider
 from storage_firestore_universe import FirestoreUniverseProvider
 from telegram_notifier import TelegramNotifier
@@ -163,6 +169,7 @@ class JobRunner:
                     "queue": "SIGNAL",
                     "analysed_at": str(datetime.now(timezone.utc)),
                     "dismissed": False,
+                    "lens": lens.name,
                 }
             retry_delay *= 2
             print(f"  Rate limited, retrying in {retry_delay}s...")
@@ -254,6 +261,51 @@ REASON: [one sentence]"""
                 if value in ("yes", "maybe"):
                     self.notifier.send(self.notifier.format_discovery(result), priority="normal")
                 break
+
+    # ------------------------------------------------------------------
+    # Signal state transitions
+    # ------------------------------------------------------------------
+
+    def _apply_state_transition(
+        self, announcement: "Announcement", result: dict, now: datetime
+    ) -> None:
+        """
+        Classify the LLM result, compute the state transition for the ticker,
+        and persist the new state + history record to universe_storage.
+        """
+        ticker = announcement.ticker
+        lens_name = result.get("lens", "unknown")
+        try:
+            strength = classify_signal_strength(result["llm_analysis"])
+            is_neg = is_negative_signal(result["llm_analysis"])
+
+            company = self.universe_storage.get_company(ticker)
+            current_state = company.signal_state if company else None
+            normalised_current = current_state or "watching"
+
+            new_state = compute_signal_transition(current_state, strength, is_neg)
+
+            if new_state is not None and new_state != normalised_current:
+                self.universe_storage.update_signal_state(ticker, new_state, now)
+                self.universe_storage.record_signal_transition(ticker, {
+                    "timestamp": now,
+                    "previous_state": normalised_current,
+                    "new_state": new_state,
+                    "trigger_source_url": announcement.source_url,
+                    "trigger_headline": announcement.headline,
+                    "lens": lens_name,
+                    "signal_strength": strength,
+                    "llm_confidence": extract_confidence(result["llm_analysis"]),
+                })
+                print(f"  [{ticker}] State: {normalised_current} → {new_state} "
+                      f"({strength}{'  [neg]' if is_neg else ''})")
+            else:
+                # No state change — touch last_signal_at only
+                self.universe_storage.update_signal_state(
+                    ticker, normalised_current, now, update_since=False
+                )
+        except Exception as e:
+            print(f"  [{ticker}] State transition error: {e}")
 
     # ------------------------------------------------------------------
     # Universe admission
@@ -471,10 +523,12 @@ REASON: [one sentence]"""
             # or LLM rejects this announcement
             self.storage.save_announcement(announcement)
 
+            now = datetime.now(timezone.utc)
             if ticker.upper() in self._universe_tickers:
                 result = self._run_signal_analysis(announcement)
                 if result:
                     self.storage.save_signal_result(result)
+                    self._apply_state_transition(announcement, result, now)
                     self._notify_signal(result)
                     self._complete_job(job_id)
                     print(f"  [{ticker}] Signal result saved.")
