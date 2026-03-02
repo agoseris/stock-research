@@ -1,6 +1,6 @@
 # Operational Reference — Stock Research System
 
-*Last updated: 27 February 2026 · App version: 2.18*
+*Last updated: 2 March 2026 · App version: 2.19*
 
 ---
 
@@ -312,14 +312,9 @@ test runs). The Firestore list is the production source of truth.
 5. For announcements of interest: click **Analyse ▾** → **🔍 Auto-fetch & submit**
    (Playwright fetches body and auto-submits). Manual paste still available if needed.
 6. **Signals tab:** review LLM analysis; dismiss reviewed items to archive them
-7. **Discovery Queue tab:** generated only when a non-universe company is submitted
-   via Ingest. Assessed as largely redundant in current workflow — the submitter
-   already knows the company. Universe admission is handled directly via the
-   Universe tab (manual add or file import).
-
-> **Note on Mute in Ingest:** the 🔇 Mute button on DISCOVERY rows (non-universe
-> companies) is redundant — there is nothing to mute since the company is not monitored.
-> Avoid using it. It will be removed or repurposed in a future update.
+7. **Discovery Queue tab:** shows post-LLM results for non-universe companies that
+   were submitted via Ingest. Rarely populated in normal workflow — if a company is
+   worth analysing it should be added to the universe first via the Universe tab.
 
 ---
 
@@ -348,7 +343,7 @@ test runs). The Firestore list is the production source of truth.
 | `docs/FTSE_AllShare_complete_*.csv` | FTSE All-Share universe source (date-versioned) |
 | `docs/LSEG_news_capture.xlsx` | Sample LSEG export — reference/testing |
 | `CLAUDE.md` | Architecture and implementation reference (for Claude Code) |
-| `HANDOVER.md` | Session-by-session operational log and pinned items |
+| `HANDOVER.md` | Current state, exclusion list, pending jobs schema |
 | `backend/gcp-credentials.json` | VM only — never committed |
 | `backend/.env` | VM only — never committed |
 | `~/deploy.sh` | VM home — pull script |
