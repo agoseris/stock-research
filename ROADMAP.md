@@ -57,11 +57,9 @@ button both depend on this URL and will work correctly for scraped rows.
 (detects `body.block-scroll`, confirms private investor, saves cookies). The
 same mechanism covers the index page.
 
-**One remaining unknown:** whether each row visibly exposes its **source type**
-(RNS / Reach / GNW). This is needed for Filter 1. To be confirmed in Task 1.0.
-If source type is not in the table, Filter 1 is skipped for scraped rows (all
-rows treated as RNS-equivalent and routed through the remaining filters). Given
-the News Type default already narrows to Earnings/News/Reach, this is low risk.
+**Source type column:** confirmed present. Values observed: RNS (dominant), PRN,
+MFN, BZN, Reach, GNW, EQS. Filter 1 (`source == "RNS"`) works identically on
+scraped rows — non-RNS rows route to suppressed as normal.
 
 ---
 
@@ -90,8 +88,8 @@ Load the URL in a browser with DevTools open. Record:
 - CSS selector for the results count display (used as wait condition)
 - CSS selector for each table row and the fields within it:
   company name + ticker, announcement type, date, time, price, price change %,
-  source URL (href), and source type (RNS/Reach/GNW) if present
-- Confirm whether source type is a visible column in the table
+  source URL (href), source type (confirmed present: RNS / PRN / MFN / BZN /
+  Reach / GNW / EQS)
 
 Output: a short note (can be added directly to this section) with the selectors.
 These are needed before Task 1.1 can be coded.
