@@ -226,8 +226,16 @@ def _expand_to_500(page) -> None:
     """Expand the Angular ng-select pagination dropdown to show 500 rows."""
     try:
         page.locator(_PAGINATION_SELECTOR).click(timeout=_ELEMENT_TIMEOUT)
-        page.get_by_text(_PAGINATION_500_TEXT).first.click(timeout=_ELEMENT_TIMEOUT)
-        page.wait_for_load_state("networkidle", timeout=_PAGINATION_TIMEOUT)
+        # Wait for the dropdown panel to actually render before clicking the option
+        page.wait_for_selector(".ng-dropdown-panel", timeout=_ELEMENT_TIMEOUT)
+        page.locator(".ng-dropdown-panel .ng-option").filter(has_text="500").first.click(
+            timeout=_ELEMENT_TIMEOUT
+        )
+        # Wait for more rows to load — success means row count exceeds the default 20
+        page.wait_for_function(
+            f"document.querySelectorAll('{_ROW_SELECTOR}').length > 20",
+            timeout=_PAGINATION_TIMEOUT,
+        )
         print("[lseg_scraper] pagination expanded to 500", flush=True)
     except PlaywrightTimeout:
         print("[lseg_scraper] pagination expand timed out — proceeding with current view", flush=True)
