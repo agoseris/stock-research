@@ -195,7 +195,7 @@ def _parse_universe_csv(file_bytes: bytes) -> list:
         exchange_raw = (row.get("Exchange") or "").strip()
         listing_exchange = "AIM" if exchange_raw.upper() == "AIM" else "LSE_MAIN"
         tier = 2 if listing_exchange == "AIM" else 1
-        mcap_raw = (row.get("Market Cap") or "").strip().replace(",", "")
+        mcap_raw = (row.get("Market Cap") or row.get("Market Cap (m)") or "").strip().replace(",", "")
         try:
             market_cap_gbp = float(mcap_raw) * 1_000_000 if mcap_raw else None
         except ValueError:
