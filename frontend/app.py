@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.33"
+VERSION = "2.34"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -46,7 +46,7 @@ html, body, [class*="css"] {
 .terminal-header {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.7rem;
-    color: #3d5166;
+    color: #5a7a9a;
     letter-spacing: 0.15em;
     text-transform: uppercase;
     margin-bottom: 0.25rem;
@@ -65,7 +65,7 @@ html, body, [class*="css"] {
 .page-subtitle {
     font-family: 'IBM Plex Sans', sans-serif;
     font-size: 0.85rem;
-    color: #4a6080;
+    color: #7a9ab8;
     margin-top: 0.3rem;
     margin-bottom: 2rem;
     font-weight: 300;
@@ -85,7 +85,7 @@ html, body, [class*="css"] {
 .stat-label {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.6rem;
-    color: #3d5166;
+    color: #5a7a9a;
     text-transform: uppercase;
     letter-spacing: 0.12em;
 }
@@ -110,7 +110,7 @@ html, body, [class*="css"] {
     font-size: 0.72rem;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: #3d5166;
+    color: #5a7a9a;
     background: transparent;
     border: none;
     padding: 0.6rem 1.2rem;
@@ -147,7 +147,7 @@ html, body, [class*="css"] {
 .card-company {
     font-family: 'IBM Plex Sans', sans-serif;
     font-size: 0.78rem;
-    color: #4a6080;
+    color: #8aabcc;
     margin-left: 0.6rem;
 }
 .card-headline {
@@ -161,7 +161,7 @@ html, body, [class*="css"] {
 .card-meta {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.62rem;
-    color: #2d3f52;
+    color: #5a7a9a;
     margin-bottom: 0.8rem;
 }
 
@@ -213,13 +213,13 @@ html, body, [class*="css"] {
 .history-row {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.64rem;
-    color: #4a6080;
+    color: #7a9ab8;
     padding: 0.25rem 0;
     border-bottom: 1px solid #0f1a26;
     line-height: 1.6;
 }
-.hist-ts { color: #2d3f52; }
-.hist-states { color: #7a9ab8; }
+.hist-ts { color: #5a7a9a; }
+.hist-states { color: #a0c0d8; }
 
 /* Analysis block */
 .analysis-block {
@@ -230,14 +230,14 @@ html, body, [class*="css"] {
     margin-top: 0.6rem;
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.72rem;
-    color: #5a7a9a;
+    color: #8aabcc;
     line-height: 1.8;
     white-space: pre-wrap;
 }
 
 /* Dividers within analysis */
-.analysis-key { color: #3d5166; }
-.analysis-val { color: #8aabcc; }
+.analysis-key { color: #5a7a9a; }
+.analysis-val { color: #a0c0d8; }
 
 /* Empty state */
 .empty-state {
@@ -256,8 +256,8 @@ html, body, [class*="css"] {
     letter-spacing: 0.1em;
     text-transform: uppercase;
     background: transparent;
-    border: 1px solid #1a2535;
-    color: #3d5166;
+    border: 1px solid #2a3f55;
+    color: #5a7a9a;
     padding: 0.25rem 0.7rem;
     border-radius: 2px;
     transition: all 0.15s;
@@ -272,7 +272,7 @@ html, body, [class*="css"] {
 .streamlit-expanderHeader {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.68rem;
-    color: #3d5166 !important;
+    color: #5a7a9a !important;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     background: transparent !important;
