@@ -527,6 +527,12 @@ REASON: [one sentence]"""
             if ticker.upper() in self._universe_tickers:
                 result = self._run_signal_analysis(announcement)
                 if result:
+                    # Enrich with price (from LSEG index page) and market cap (from Firestore)
+                    result["price_pence"] = job.get("price")
+                    result["price_change"] = job.get("price_change")
+                    company = self.universe_storage.get_company(ticker)
+                    if company:
+                        result["market_cap_gbp"] = company.market_cap_gbp
                     self.storage.save_signal_result(result)
                     self._apply_state_transition(announcement, result, now)
                     self._notify_signal(result)
