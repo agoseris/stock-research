@@ -150,6 +150,19 @@ def format_price_info(price_pence, price_change) -> str:
         price_str = f"{float(price_pence):.0f}p"
         if price_change:
             chg = str(price_change).strip()
+            # Parse numeric value to determine direction reliably.
+            # LSEG does not always include a '+' prefix on positive values.
+            try:
+                val = float(chg.replace(",", "").rstrip("%"))
+            except ValueError:
+                val = None
+            if val is not None:
+                if val > 0:
+                    return f'{price_str} <span class="card-price-up">▲ {chg}</span>'
+                if val < 0:
+                    return f'{price_str} <span class="card-price-down">▼ {chg}</span>'
+                return f'{price_str} <span class="card-price-neutral">↔ 0%</span>'
+            # Fallback for unparseable strings — use string prefix heuristic
             if chg.startswith("+"):
                 return f'{price_str} <span class="card-price-up">▲ {chg}</span>'
             if chg.startswith("-"):

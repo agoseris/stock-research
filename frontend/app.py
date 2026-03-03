@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.43"
+VERSION = "2.45"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -555,6 +555,7 @@ with tab_signals:
             co_name     = result.get("company_name") or ""
             headline    = result.get("headline") or "—"
             source      = result.get("source") or "—"
+            source_url  = result.get("source_url", "")
             analysed_at = result.get("analysed_at") or ""
             summary     = get_field(analysis, "SUMMARY")
 
@@ -570,12 +571,21 @@ with tab_signals:
             source_badge = f'<span class="badge badge-source">{source}</span>'
 
             mkt = result.get("market_cap_gbp") or company.get("market_cap_gbp")
-            mkt_str   = format_market_cap(mkt)
+            mkt_str    = format_market_cap(mkt)
+            mkt_label  = f"Market Cap {mkt_str}" if mkt_str != "—" else "—"
             price_html = format_price_info(result.get("price_pence"), result.get("price_change"))
 
             urgency_html = (
                 '<div class="urgency-banner">⚠ COUNTER-SIGNAL — REVIEW POSITION</div>'
                 if is_urgent else ""
+            )
+
+            # Headline links to the source article when a URL is available
+            headline_html = (
+                f'<a href="{source_url}" target="_blank" '
+                f'style="color:inherit;text-decoration:none;'
+                f'border-bottom:1px solid rgba(100,150,200,0.25);">{headline}</a>'
+                if source_url else headline
             )
 
             card_html = (
@@ -584,9 +594,9 @@ with tab_signals:
                 f'<div class="card-row-top">'
                 f'<span><span class="card-ticker">{ticker}</span>'
                 f'<span class="card-company">{co_name}</span></span>'
-                f'<span class="card-market">{mkt_str} &nbsp;·&nbsp; {price_html}</span>'
+                f'<span class="card-market">{mkt_label} &nbsp;·&nbsp; {price_html}</span>'
                 f'</div>'
-                f'<div class="card-headline">{headline}</div>'
+                f'<div class="card-headline">{headline_html}</div>'
                 f'<div class="card-meta">{format_timestamp(analysed_at)} &nbsp;·&nbsp; {source}</div>'
                 f'<div class="card-badges">{badge_html}{state_badge}{pos_badge}</div>'
                 f'</div>'
@@ -597,14 +607,17 @@ with tab_signals:
                 [4, 1, 1, 1, 1, 1, 1]
             )
             with col_exp:
-                with st.expander("Summary + Full analysis"):
+                with st.expander("Analysis detail"):
                     if summary:
                         st.markdown(
                             f'<div style="font-size:0.85rem;color:#a0c0d8;font-family:IBM Plex Sans,'
                             f'sans-serif;line-height:1.6;margin-bottom:0.8rem;">{summary}</div>',
                             unsafe_allow_html=True,
                         )
-                    parsed = parse_analysis(analysis)
+                    # Exclude fields already surfaced at card level
+                    _top_level = {"SUMMARY", "RECOMMENDED_ACTION"}
+                    parsed = [(k, v) for k, v in parse_analysis(analysis)
+                              if k.upper() not in _top_level]
                     formatted = "\n".join(f"{k}: {v}" if k else v for k, v in parsed)
                     st.markdown(f'<div class="analysis-block">{formatted}</div>', unsafe_allow_html=True)
 
@@ -1315,8 +1328,9 @@ with tab_ingest:
             else:
                 c_mute.caption("—")
 
-            # Action column
+            # Action column — 🤖 auto-fetch (one-click) and 👨‍💻 manual sub-form
             subform_key = "ingest_subform_open"
+            fetch_err_key = f"fetch_err_{i}"
 
             if row["outcome"] == "passed":
                 if src_url and src_url in processed_urls:
@@ -1325,13 +1339,36 @@ with tab_ingest:
                     c_action.caption("⏳ Submitted")
                 else:
                     row_key = f"body_{i}"
-                    if c_action.button("Analyse ▾", key=f"open_body_{i}"):
+                    btn_auto, btn_manual = c_action.columns(2)
+
+                    # 🤖 Auto button — one-click fetch + submit (Playwright only)
+                    if _PLAYWRIGHT_AVAILABLE and src_url:
+                        if btn_auto.button("🤖", key=f"fetch_{i}",
+                                           help="Auto-fetch announcement body and submit for analysis"):
+                            with st.spinner("Fetching and submitting…"):
+                                try:
+                                    fetched = _fetch_lseg_body(src_url)
+                                    st.session_state.pop(fetch_err_key, None)
+                                    submit_job(db, row, fetched)
+                                    st.session_state["ingest_session_submitted"].add(row_uid)
+                                    st.session_state.pop(subform_key, None)
+                                    _get_processed_source_urls.clear()
+                                    st.rerun()
+                                except Exception as exc:
+                                    st.session_state[fetch_err_key] = str(exc)
+                        if fetch_err_key in st.session_state:
+                            st.error(f"Auto-fetch failed: {st.session_state[fetch_err_key]}")
+
+                    # 👨‍💻 Manual button — opens paste sub-form
+                    if btn_manual.button("👨‍💻", key=f"open_body_{i}",
+                                         help="Paste announcement text manually"):
                         if st.session_state.get(subform_key) == row_key:
                             st.session_state.pop(subform_key, None)
                         else:
                             st.session_state[subform_key] = row_key
                         st.rerun()
 
+                    # Manual sub-form (no auto-fetch — use 🤖 button for that)
                     if st.session_state.get(subform_key) == row_key:
                         with st.container():
                             form_hdr, form_close = st.columns([9, 1])
@@ -1340,27 +1377,11 @@ with tab_ingest:
                             if form_close.button("✕", key=f"cancel_{i}", help="Close"):
                                 st.session_state.pop(subform_key, None)
                                 st.rerun()
-                            fetch_err_key = f"fetch_err_{i}"
-                            if _PLAYWRIGHT_AVAILABLE and src_url:
-                                if st.button("🔍 Auto-fetch & submit", key=f"fetch_{i}"):
-                                    with st.spinner("Fetching and submitting…"):
-                                        try:
-                                            fetched = _fetch_lseg_body(src_url)
-                                            st.session_state.pop(fetch_err_key, None)
-                                            submit_job(db, row, fetched)
-                                            st.session_state["ingest_session_submitted"].add(row_uid)
-                                            st.session_state.pop(subform_key, None)
-                                            _get_processed_source_urls.clear()
-                                            st.rerun()
-                                        except Exception as exc:
-                                            st.session_state[fetch_err_key] = str(exc)
-                                if fetch_err_key in st.session_state:
-                                    st.error(f"Auto-fetch failed: {st.session_state[fetch_err_key]}")
                             body = st.text_area(
                                 "Announcement body",
                                 key=row_key,
                                 height=150,
-                                placeholder="Paste body text, or use Auto-fetch above",
+                                placeholder="Paste announcement body text here",
                                 label_visibility="collapsed",
                             )
                             if st.button(

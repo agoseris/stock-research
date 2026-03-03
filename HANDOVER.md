@@ -1,6 +1,6 @@
 # Session Handover
-**Last updated:** 3 March 2026 (updated)
-**App version:** 2.35
+**Last updated:** 3 March 2026 (session 2)
+**App version:** 2.44
 **Branch:** `master`
 
 ---
@@ -11,13 +11,76 @@ App running locally on WSL2 at `http://localhost:8501`.
 
 | Tab | Status | Notes |
 |---|---|---|
-| Signals | Working | **Phase 2c complete (v2.35).** Filter bar, grouped expandable sections (Urgent/Action/Monitor/No Action), compact cards with market cap + price, signal state badges with age, position controls (Act/Defer/Decline/Dismiss), history toggle, urgency highlight for Acted+counter-signal. |
+| Signals | Working | **Phase 2c complete (v2.35); polished (v2.36–2.44).** Filter bar, grouped expandable sections (Urgent/Action/Monitor/No Action), compact cards with market cap + price, signal state badges with age, state-gated position controls (Act/Defer/Decline/Close/Dismiss), history toggle, urgency highlight for Acted+counter-signal. Declined signals hidden from default view. Headline links to source article. |
 | Discovery | Working | Post-LLM discovery results — distinct from Ingest discovery candidates |
 | Universe | Working | Manual add and file import both confirmed end-to-end |
 | Ingest | Working | **Phase 1 complete (v2.31).** "Fetch from LSEG" button live. Three-index fetch: MCX (FTSE 250) + SMX (FTSE Small Cap) + AXX (FTSE AIM All-Share), each under 500 rows/day, merged + deduplicated on source_url. Excel upload retained as fallback. |
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
 **Next steps:** Phase 3 — Lens 1 validation (director/PDMR buying). See `ROADMAP.md`.
+
+---
+
+## Signals Tab — Position State Machine (3 March 2026, session 2)
+
+Implemented proper state-gated button rendering and the `Close` position state transition. Prior to this session the button set was fixed (Act / Defer / Decline / Dismiss) regardless of current state, allowing invalid transitions such as Acted → Dismiss.
+
+### State machine (valid transitions)
+
+| Current position state | Available buttons |
+|---|---|
+| None / Closed | Act · Defer · Decline · Dismiss |
+| Acted | Close |
+| Deferred | Act · Decline · Dismiss |
+| Declined | Dismiss |
+
+- **Close:** exits a position. Resets `signal_state` to `watching` and `signal_state_since` to now (same as Decline). The company returns to a neutral state ready to be re-evaluated on future signals. Position state remains `closed` for audit trail.
+- **Closed vs. Dismissed:** Close retains the signal_results document (history preserved); Dismiss hard-deletes it. Both return the company to `watching` state.
+- **Closed for future signals:** treated identically to `None` — full button set shown, because a new incoming signal represents a fresh evaluation opportunity.
+- **Declined signals:** hidden from the default "All" filter view. Accessible via the "Declined" radio option on the filter bar.
+
+### `set_position_state` fix
+
+`set_position_state` in `firestore_helpers.py` now resets `signal_state` → `watching` and `signal_state_since` → now when state is `closed` or `declined`. Previously this reset only happened in the backend pipeline; the frontend was leaving `signal_state` unchanged, causing stale state badges after position moves.
+
+### Signal visibility fix
+
+Prior to this session, signals for acted/deferred tickers could disappear from the Signals tab if pushed off by the 100-signal fetch limit (was exactly 100 signals in the system).
+
+- Fetch limit raised: `get_signal_results` / `get_signal_results_all` default increased 100 → 500.
+- Top-up pass added: after loading the main 500-signal list, `get_all_signals_for_ticker` is called for any acted/deferred ticker not already in the result set. Guarantees these always appear regardless of queue depth.
+
+### New functions added
+
+**`frontend/firestore_helpers.py`:**
+- `get_all_signals_for_ticker(db, ticker)` — single-field equality query (auto-indexed), filters `dismissed` in Python, sorts newest-first. Used by the top-up pass and by the "Fetch & Analyse" body retrieval path.
+- `cleanup_universe_orphans(db)` — deletes any `universe_companies` document that has no `ticker_lse` field. Returns count deleted. Clears universe caches. Called from Universe tab on load.
+
+---
+
+## Signal Card UI Improvements (3 March 2026, session 2)
+
+Signal cards in the Signals tab were refined following user review:
+
+| Issue | Fix |
+|---|---|
+| "Analysis detail" expander repeated Summary text verbatim | `SUMMARY` and `RECOMMENDED_ACTION` keys filtered out of the detail section (already shown on the card face) |
+| Headline was not clickable | Headline text wrapped in `<a href=source_url>` with `target="_blank"` |
+| Market cap had no label prefix | Changed from bare value to `"Market Cap £45m"` (or `—` if unavailable) |
+| Positive price changes showed no arrow | `format_price_info` in `ui_helpers.py` now parses the change value numerically; LSEG often omits the `+` prefix on positive values, breaking the old string-prefix heuristic |
+| Zero change shown as `▲ 0%` | Zero now shows `↔ 0%` |
+
+---
+
+## Universe Orphan Cleanup (3 March 2026, session 2)
+
+**Root cause:** during an earlier session, a market cap propagation feature was briefly deployed to the VM before being rolled back. The `update_market_data` call created `universe_companies` documents containing only `market_cap_gbp` — no `ticker_lse`, `company_name`, or other fields — for tickers encountered in news that were not yet in the universe.
+
+**Fix:**
+1. `cleanup_universe_orphans(db)` in `firestore_helpers.py` — deletes any universe doc missing `ticker_lse`. Called once on Universe tab load; no-ops silently if there are none.
+2. Display-level safety net in Universe tab: filters the loaded company list to `c.get("ticker_lse")` truthy before rendering, preventing blank rows even if orphans are created in future.
+
+**Market cap ingestion decision:** market cap data is only updated during quarterly CSV imports. Live market cap capture from LSEG news pages is not feasible — the news index page does not carry market cap data (it appears on the LSEG stock screener page, which is a separate workflow). Decision: live with quarterly refresh cadence.
 
 ---
 
