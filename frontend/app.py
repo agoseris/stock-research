@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.32"
+VERSION = "2.33"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -442,24 +442,24 @@ with tab_signals:
 
             is_urgent = pos_state == "acted" and sig_state in ("signal_negative", "signal_mixed")
             classes = f"{card_class} urgent" if is_urgent else card_class
-            urgency_html = (
-                '<div class="urgency-banner">⚠ COUNTER-SIGNAL — REVIEW POSITION</div>'
-                if is_urgent else ""
+            urgency_html = '<div class="urgency-banner">⚠ COUNTER-SIGNAL — REVIEW POSITION</div>' if is_urgent else ""
+            summary_html = (
+                f'<div style="margin-top:0.7rem;font-size:0.82rem;color:#7a9ab8;'
+                f'font-family:IBM Plex Sans,sans-serif;line-height:1.5;">{summary}</div>'
+                if summary else ""
             )
-
-            st.markdown(f"""
-<div class="signal-card {classes}">
-    {urgency_html}
-    <div>
-        <span class="card-ticker">{ticker}</span>
-        <span class="card-company">{result.get("company_name", "")}</span>
-    </div>
-    <div class="card-headline">{result.get("headline", "—")}</div>
-    <div class="card-meta">{format_timestamp(result.get("analysed_at", ""))}</div>
-    <div>{badge_html}{source_badge}{state_badge}{pos_badge}</div>
-    {f'<div style="margin-top:0.7rem;font-size:0.82rem;color:#7a9ab8;font-family:IBM Plex Sans,sans-serif;line-height:1.5;">{summary}</div>' if summary else ''}
-</div>
-""", unsafe_allow_html=True)
+            card_html = (
+                f'<div class="signal-card {classes}">'
+                f'{urgency_html}'
+                f'<div><span class="card-ticker">{ticker}</span>'
+                f'<span class="card-company">{result.get("company_name", "")}</span></div>'
+                f'<div class="card-headline">{result.get("headline", "—")}</div>'
+                f'<div class="card-meta">{format_timestamp(result.get("analysed_at", ""))}</div>'
+                f'<div>{badge_html}{source_badge}{state_badge}{pos_badge}</div>'
+                f'{summary_html}'
+                f'</div>'
+            )
+            st.markdown(card_html, unsafe_allow_html=True)
 
             col_analysis, col_act, col_defer, col_decline, col_hist, col_dismiss = st.columns(
                 [5, 1, 1, 1, 1, 1]
