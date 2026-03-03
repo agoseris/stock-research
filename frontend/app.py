@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.35"
+VERSION = "2.36"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -729,7 +729,7 @@ with tab_discovery:
                         key=f"disc_admit_exchange_{doc_id}"
                     )
                     admit_mcap = st.number_input(
-                        "Market Cap (£M)", min_value=0.0, max_value=1000.0,
+                        "Market Cap (£M)", min_value=0.0,
                         value=0.0, key=f"disc_admit_mcap_{doc_id}"
                     )
                     if st.button("Submit for admission", key=f"disc_admit_submit_{doc_id}"):
