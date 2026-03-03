@@ -191,7 +191,15 @@ making it immediately obvious whether a deploy has taken effect.
   GCP Cloud Shell Editor cannot access `/home/danjmorris` directly. Note that sshfs has been implemented successfully, so a local mount point for VM filesystem can be made available.
 - **Large pastes:** GCP browser SSH terminal truncates large pastes.
   Use file upload instead.
-- **python-telegram-bot:** async library — use `asyncio.run()` from sync context
+- **python-telegram-bot:** async library. Do NOT reuse a `Bot` instance across multiple
+  `asyncio.run()` calls — the internal HTTP client binds to the first event loop, which
+  is closed after the first call, causing `RuntimeError('Event loop is closed')` on the
+  next. Correct pattern: create `Bot` as an async context manager inside a coroutine,
+  call that coroutine via `asyncio.run()` each time. See `telegram_notifier.py`.
+- **systemd + Python stdout buffering:** Python buffers stdout when writing to a pipe
+  (which `StandardOutput=journal` is). Add `Environment=PYTHONUNBUFFERED=1` to the
+  `[Service]` block or use `python -u`; otherwise `print()` output is silently swallowed
+  and `journalctl` shows nothing.
 - **Gemini package:** use `from google import genai` and `genai.Client()`.
   `google.generativeai` is deprecated.
 - **Firestore composite index:** `dismissed + stored_at` query requires a composite

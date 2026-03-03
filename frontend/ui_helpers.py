@@ -52,3 +52,34 @@ def format_timestamp(ts_str):
         return dt.strftime("%d %b %Y  %H:%M UTC")
     except Exception:
         return ts_str or "—"
+
+
+_SIGNAL_STATE_STYLE = {
+    "watching":           ("WATCHING",   "badge-state-watching"),
+    "monitor":            ("MONITOR",    "badge-state-monitor"),
+    "signal_active":      ("SIGNAL",     "badge-state-active"),
+    "signal_reinforced":  ("CONFIRMED",  "badge-state-reinforced"),
+    "signal_mixed":       ("MIXED",      "badge-state-mixed"),
+    "signal_negative":    ("NEGATIVE",   "badge-state-negative"),
+}
+
+_POSITION_STATE_STYLE = {
+    "acted":    ("ACTED",    "badge-pos-acted"),
+    "deferred": ("DEFERRED", "badge-pos-deferred"),
+    "declined": ("DECLINED", "badge-pos-declined"),
+    "closed":   ("CLOSED",   "badge-pos-closed"),
+}
+
+
+def signal_state_badge(state):
+    """Return HTML badge for a signal_state value."""
+    label, cls = _SIGNAL_STATE_STYLE.get(state or "watching", ("WATCHING", "badge-state-watching"))
+    return f'<span class="badge {cls}">{label}</span>'
+
+
+def position_state_badge(state):
+    """Return HTML badge for a position_state value, or empty string if unset."""
+    if not state:
+        return ""
+    label, cls = _POSITION_STATE_STYLE.get(state, (state.upper(), "badge-no"))
+    return f'<span class="badge {cls}">{label}</span>'

@@ -1,6 +1,6 @@
 # Session Handover
-**Last updated:** 2 March 2026
-**App version:** 2.29
+**Last updated:** 3 March 2026
+**App version:** 2.32
 **Branch:** `master`
 
 ---
@@ -11,13 +11,13 @@ App running locally on WSL2 at `http://localhost:8501`.
 
 | Tab | Status | Notes |
 |---|---|---|
-| Signals | Working | UI layout not yet reviewed against real usage |
+| Signals | Working | **Phase 2c complete (v2.32).** Signal state badges (WATCHING/MONITOR/SIGNAL/CONFIRMED/MIXED/NEGATIVE), position state badges, position controls (Act/Defer/Pass), signal history toggle, urgency highlight for Acted+counter-signal. |
 | Discovery | Working | Post-LLM discovery results — distinct from Ingest discovery candidates |
 | Universe | Working | Manual add and file import both confirmed end-to-end |
 | Ingest | Working | **Phase 1 complete (v2.31).** "Fetch from LSEG" button live. Three-index fetch: MCX (FTSE 250) + SMX (FTSE Small Cap) + AXX (FTSE AIM All-Share), each under 500 rows/day, merged + deduplicated on source_url. Excel upload retained as fallback. |
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
-**Next steps:** see `ROADMAP.md`.
+**Next steps:** Phase 3 — Lens 1 validation (director/PDMR buying). See `ROADMAP.md`.
 
 ---
 
@@ -64,6 +64,66 @@ All new fields on `UniverseCompany` are `Optional` with `None` defaults. Existin
 - `update_signal_state(ticker, state, timestamp, update_since=True)` — pass `update_since=False` when there is no state change, to touch `last_signal_at` without resetting `signal_state_since` (which would prevent decay)
 - `is_negative=True` overrides `signal_strength` in the transition lookup — any RECOMMENDED_ACTION: no verdict uses the `"negative"` row of the table regardless of classified strength
 - `signal_negative` is a terminal state: all incoming signals (positive or negative) produce no transition — the company must decay back to `watching` first
+
+---
+
+## Phase 2c — Dashboard Integration (3 March 2026)
+
+Frontend wiring of the two-axis state model into the Signals tab.
+
+### What was built
+
+**`frontend/ui_helpers.py`** — two new functions:
+- `signal_state_badge(state)` → HTML badge for signal_state (WATCHING/MONITOR/SIGNAL/CONFIRMED/MIXED/NEGATIVE)
+- `position_state_badge(state)` → HTML badge for position_state (ACTED/DEFERRED/DECLINED/CLOSED)
+
+**`frontend/firestore_helpers.py`** — two new functions:
+- `get_signal_history_for_ticker(_db, ticker, limit=10)` — cached 2 min; queries `signal_history` subcollection newest first
+- `set_position_state(db, ticker, state)` — writes `position_state` + `position_state_since` (ISO string) to `universe_companies/{ticker}` with merge=True; clears relevant caches
+
+**`frontend/app.py`** (v2.32):
+- New CSS: 6 signal state badge classes, 4 position state badge classes, `.signal-card.urgent`, `.urgency-banner`, `.history-row`
+- `company_map` built at startup from `get_all_universe_companies` (cached, no extra Firestore reads)
+- Signals tab updated:
+  - Sort: Acted+negative/mixed → top (urgency 0), then yes → monitor → other
+  - Card HTML: signal_state badge + position_state badge appended to badge row
+  - Urgency: dark red card border + "⚠ COUNTER-SIGNAL — REVIEW POSITION" banner for Acted+counter-signal
+  - Position controls: Act / Defer / Pass buttons (show active state label if set); writes directly to Firestore
+  - Signal history: per-card "Hist" toggle button (session_state); fetches and renders subcollection on open
+
+### Key design notes
+- History is fetched lazily (only when user clicks "Hist") — avoids N subcollection queries on every render
+- `set_position_state` writes ISO string for `position_state_since` — consistent with how `update_position_state` stores it in the backend
+- No position state toggle/clear in this version — clicking always sets (clear available via Firestore console if needed)
+- Position history subcollection is NOT written from frontend — backend pipeline handles history recording when it reads position_state
+
+---
+
+## Backend Operational Fixes (3 March 2026)
+
+### journalctl logging
+`job_runner.service` lacked `Environment=PYTHONUNBUFFERED=1`. Python buffers stdout
+when writing to a pipe (systemd journal), so all `print()` output was silently swallowed.
+Fixed by adding the env var to the service file. Follow logs with:
+```
+journalctl -u job_runner -f
+```
+
+### Telegram event loop fix
+`TelegramNotifier` instantiated `Bot` once in `__init__` and reused it across `send()`
+calls. `python-telegram-bot` v20+ binds the bot's internal HTTP client to the first event
+loop created by `asyncio.run()`. After that loop closes, subsequent calls raise
+`RuntimeError('Event loop is closed')`. Fixed: `Bot` now created as an async context
+manager inside a `_send()` coroutine, called fresh per `send()` invocation.
+
+### Signal notification content enriched
+`format_signal()` in `telegram_notifier.py` now includes:
+- Headline as a clickable link (`[headline](source_url)` in Telegram Markdown)
+- Recommended Action moved to top (immediately after Company/Ticker/Headline)
+- Approx Market Cap (from `universe_companies` Firestore doc via `job_runner`)
+- Approx Price (pence + change %, from LSEG index page, stored in `pending_jobs.price`)
+`job_runner._process_job` enriches the result dict with `price_pence`, `price_change`,
+and `market_cap_gbp` before calling `save_signal_result` and `_notify_signal`.
 
 ---
 

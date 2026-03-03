@@ -1,6 +1,6 @@
 # Firestore reads, writes, and cached data helpers for the LSE Research Terminal.
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import streamlit as st
 from google.cloud import firestore
@@ -234,6 +234,36 @@ def _get_processed_source_urls(_db) -> set:
         return {d.to_dict().get("source_url", "") for d in docs if d.to_dict().get("source_url")}
     except Exception:
         return set()
+
+
+@st.cache_data(ttl=120)
+def get_signal_history_for_ticker(_db, ticker: str, limit: int = 10) -> list:
+    """Fetch the signal_history subcollection for a ticker, newest first. Cached 2 min."""
+    try:
+        docs = (
+            _db.collection("universe_companies")
+            .document(ticker.upper())
+            .collection("signal_history")
+            .order_by("timestamp", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .stream()
+        )
+        return [d.to_dict() for d in docs]
+    except Exception:
+        return []
+
+
+def set_position_state(db, ticker: str, state: str) -> None:
+    """Write position_state and position_state_since to a universe_companies doc."""
+    db.collection("universe_companies").document(ticker.upper()).set(
+        {
+            "position_state": state,
+            "position_state_since": datetime.now(timezone.utc).isoformat(),
+        },
+        merge=True,
+    )
+    get_all_universe_companies.clear()
+    get_signal_history_for_ticker.clear()
 
 
 def submit_job(db, row_dict, body):
