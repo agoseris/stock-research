@@ -1,6 +1,6 @@
 # Session Handover
-**Last updated:** 3 March 2026
-**App version:** 2.32
+**Last updated:** 3 March 2026 (updated)
+**App version:** 2.35
 **Branch:** `master`
 
 ---
@@ -11,13 +11,28 @@ App running locally on WSL2 at `http://localhost:8501`.
 
 | Tab | Status | Notes |
 |---|---|---|
-| Signals | Working | **Phase 2c complete (v2.32).** Signal state badges (WATCHING/MONITOR/SIGNAL/CONFIRMED/MIXED/NEGATIVE), position state badges, position controls (Act/Defer/Pass), signal history toggle, urgency highlight for Acted+counter-signal. |
+| Signals | Working | **Phase 2c complete (v2.35).** Filter bar, grouped expandable sections (Urgent/Action/Monitor/No Action), compact cards with market cap + price, signal state badges with age, position controls (Act/Defer/Decline/Dismiss), history toggle, urgency highlight for Acted+counter-signal. |
 | Discovery | Working | Post-LLM discovery results — distinct from Ingest discovery candidates |
 | Universe | Working | Manual add and file import both confirmed end-to-end |
 | Ingest | Working | **Phase 1 complete (v2.31).** "Fetch from LSEG" button live. Three-index fetch: MCX (FTSE 250) + SMX (FTSE Small Cap) + AXX (FTSE AIM All-Share), each under 500 rows/day, merged + deduplicated on source_url. Excel upload retained as fallback. |
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
 **Next steps:** Phase 3 — Lens 1 validation (director/PDMR buying). See `ROADMAP.md`.
+
+---
+
+## Data Fix — Market Cap Backfill (3 March 2026)
+
+**Root cause:** `_parse_universe_csv` in `parse_helpers.py` always read column `"Market Cap"`. FTSE All-Share CSV uses `"Market Cap (m)"`. A bulk import via the UI overwrote all FTSE companies' market caps with null and cascaded through `update_companies` writes to zero out AIM companies too.
+
+**Fix:** Changed `parse_helpers.py` line 198 to try both column names:
+```python
+mcap_raw = (row.get("Market Cap") or row.get("Market Cap (m)") or "").strip().replace(",", "")
+```
+
+**Data backfill:** 1089 companies updated directly in Firestore from source CSVs using a one-off Python script run locally (WSL2). 1 company (admitted via Discovery) has no market cap — expected.
+
+**Price data:** Only available in `signal_results` for signals submitted via LSEG interactive path after commit `a301c99`. CH pipeline signals have no price data — this is expected and not backfillable.
 
 ---
 
