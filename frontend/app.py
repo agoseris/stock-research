@@ -1341,9 +1341,9 @@ with tab_ingest:
                     row_key = f"body_{i}"
                     btn_auto, btn_manual = c_action.columns(2)
 
-                    # 🤖 Auto button — one-click fetch + submit (Playwright only)
+                    # ⚡ Auto button — one-click fetch + submit (Playwright only)
                     if _PLAYWRIGHT_AVAILABLE and src_url:
-                        if btn_auto.button("🤖", key=f"fetch_{i}",
+                        if btn_auto.button("⚡", key=f"fetch_{i}",
                                            help="Auto-fetch announcement body and submit for analysis"):
                             with st.spinner("Fetching and submitting…"):
                                 try:
