@@ -84,10 +84,16 @@ def get_discovery_results_all(db, limit=100):
 
 
 def dismiss_document(db, collection, doc_id):
+    """Soft-dismiss for discovery_results (sets dismissed=True). Retained for Discovery tab."""
     db.collection(collection).document(doc_id).update({
         "dismissed": True,
         "dismissed_at": datetime.utcnow().isoformat(),
     })
+
+
+def delete_signal_result(db, doc_id: str) -> None:
+    """Hard-delete a signal_results document. Irreversible."""
+    db.collection("signal_results").document(doc_id).delete()
 
 
 # ── Config store ───────────────────────────────────────────────────────────────

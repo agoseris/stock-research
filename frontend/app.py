@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.34"
+VERSION = "2.35"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -122,7 +122,7 @@ html, body, [class*="css"] {
     background: transparent !important;
 }
 
-/* Signal cards */
+/* Signal cards — full size (Discovery tab) */
 .signal-card {
     background: #0f1520;
     border: 1px solid #1a2535;
@@ -136,6 +136,40 @@ html, body, [class*="css"] {
 .signal-card.action-monitor { border-left-color: #7eb8f7; }
 .signal-card.action-no { border-left-color: #1a2535; }
 .signal-card.discovery { border-left-color: #4af7a0; }
+
+/* Signal cards — compact (Signals tab) */
+.signal-card-compact {
+    background: #0f1520;
+    border: 1px solid #1a2535;
+    border-left: 3px solid #1a2535;
+    border-radius: 4px;
+    padding: 0.75rem 1.1rem;
+    margin-bottom: 0.4rem;
+}
+.signal-card-compact.action-yes { border-left-color: #f7a84a; }
+.signal-card-compact.action-monitor { border-left-color: #7eb8f7; }
+.signal-card-compact.action-no { border-left-color: #1a2535; }
+.signal-card-compact.urgent { border-left-color: #e55353 !important; background: #140c0c; }
+
+/* Compact card layout */
+.card-row-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.2rem;
+}
+.card-market {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    color: #8aabcc;
+    white-space: nowrap;
+}
+.card-price-up   { color: #4af7a0; }
+.card-price-down { color: #e55353; }
+.card-price-neutral { color: #8aabcc; }
+.card-price-null { color: #4a6080; }
+.card-price      { color: #8aabcc; }
+.card-badges     { margin-top: 0.45rem; }
 
 .card-ticker {
     font-family: 'IBM Plex Mono', monospace;
@@ -198,7 +232,8 @@ html, body, [class*="css"] {
 .badge-pos-closed   { background: #0e1a26; color: #3d5166; border: 1px solid #1a253544; }
 
 /* Urgency card variant */
-.signal-card.urgent { border-left-color: #e55353 !important; background: #140c0c; }
+.signal-card.urgent,
+.signal-card-compact.urgent { border-left-color: #e55353 !important; background: #140c0c; }
 .urgency-banner {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.62rem;
@@ -305,6 +340,7 @@ from firestore_helpers import (
     submit_job,
     get_signal_history_for_ticker,
     set_position_state,
+    delete_signal_result,
 )
 from parse_helpers import (
     _parse_lseg_excel, _parse_universe_csv, _compute_universe_delta,
@@ -318,6 +354,9 @@ from ui_helpers import (
     format_timestamp,
     signal_state_badge,
     position_state_badge,
+    format_signal_age,
+    format_market_cap,
+    format_price_info,
 )
 
 try:
@@ -411,99 +450,177 @@ tab_signals, tab_discovery, tab_universe, tab_ingest, tab_config = st.tabs([
 # ── Signals tab ────────────────────────────────────────────────────────────────
 
 with tab_signals:
-    if not signals:
-        st.markdown('<div class="empty-state">NO SIGNALS · Pipeline has not surfaced any results yet</div>', unsafe_allow_html=True)
+    # ── Filter bar
+    fc1, fc2, fc3 = st.columns([5, 2, 2])
+    with fc1:
+        pos_filter = st.radio(
+            "Position",
+            ["All", "Unreviewed", "Acted", "Deferred", "Declined"],
+            horizontal=True,
+            key="sig_pos_filter",
+        )
+    with fc2:
+        since_filter = st.selectbox(
+            "Since",
+            ["All time", "Today", "This week", "This month"],
+            key="sig_since_filter",
+        )
+    with fc3:
+        hide_no_action = st.checkbox("Hide 'No action' signals", value=True, key="sig_hide_no_action")
+
+    # ── Compute time cutoff
+    _since_map = {
+        "Today":      datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0),
+        "This week":  datetime.now(timezone.utc) - timedelta(days=7),
+        "This month": datetime.now(timezone.utc) - timedelta(days=30),
+    }
+    since_cutoff = _since_map.get(since_filter)
+
+    def _passes_filters(result, company):
+        pos = (company.get("position_state") or "").strip()
+        if pos_filter == "Unreviewed" and pos:
+            return False
+        if pos_filter == "Acted"    and pos != "acted":
+            return False
+        if pos_filter == "Deferred" and pos != "deferred":
+            return False
+        if pos_filter == "Declined" and pos != "declined":
+            return False
+        if since_cutoff:
+            try:
+                dt = datetime.fromisoformat(result.get("analysed_at", "").replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt < since_cutoff:
+                    return False
+            except Exception:
+                pass
+        return True
+
+    # ── Classify into groups
+    grp_urgent, grp_action, grp_monitor, grp_no_action = [], [], [], []
+    for doc_id, result in signals:
+        company = company_map.get((result.get("ticker") or "").upper(), {})
+        if not _passes_filters(result, company):
+            continue
+        action_val = get_field(result.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower()
+        if action_val not in ("yes", "monitor") and hide_no_action:
+            continue
+        pos = (company.get("position_state") or "").strip()
+        sig = company.get("signal_state") or "watching"
+        item = (doc_id, result, company)
+        if pos == "acted" and sig in ("signal_negative", "signal_mixed"):
+            grp_urgent.append(item)
+        elif action_val == "yes":
+            grp_action.append(item)
+        elif action_val == "monitor":
+            grp_monitor.append(item)
+        else:
+            grp_no_action.append(item)
+
+    total_shown = len(grp_urgent) + len(grp_action) + len(grp_monitor) + len(grp_no_action)
+
+    if total_shown == 0:
+        st.markdown(
+            '<div class="empty-state">NO SIGNALS MATCH CURRENT FILTERS</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        def _signal_sort_key(item):
-            doc_id, result = item
-            ticker = result.get("ticker", "").upper()
-            company = company_map.get(ticker, {})
-            pos = company.get("position_state") or ""
-            sig = company.get("signal_state") or "watching"
-            # Acted + counter-signal → surface at top with maximum urgency
-            if pos == "acted" and sig in ("signal_negative", "signal_mixed"):
-                return 0
-            val = get_field(result.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower()
-            return {"yes": 1, "monitor": 2}.get(val, 3)
+        # ── Card renderer (defined once, called per group)
+        def _render_signal_card(doc_id, result, company):
+            analysis    = result.get("llm_analysis", "")
+            ticker      = result.get("ticker") or "—"
+            co_name     = result.get("company_name") or ""
+            headline    = result.get("headline") or "—"
+            source      = result.get("source") or "—"
+            analysed_at = result.get("analysed_at") or ""
+            summary     = get_field(analysis, "SUMMARY")
 
-        for doc_id, result in sorted(signals, key=_signal_sort_key):
-            analysis = result.get("llm_analysis", "")
-            ticker = result.get("ticker", "—")
-            badge_html, card_class = recommended_action_badge(analysis)
-            summary = get_field(analysis, "SUMMARY")
-            source_badge = f'<span class="badge badge-source">{result.get("source", "—")}</span>'
-
-            company = company_map.get(ticker.upper(), {})
             sig_state = company.get("signal_state") or "watching"
-            pos_state = company.get("position_state") or ""
-
-            state_badge = signal_state_badge(sig_state)
-            pos_badge = position_state_badge(pos_state)
-
+            pos_state = (company.get("position_state") or "").strip()
+            sig_age   = format_signal_age(company.get("signal_state_since"))
             is_urgent = pos_state == "acted" and sig_state in ("signal_negative", "signal_mixed")
-            classes = f"{card_class} urgent" if is_urgent else card_class
-            urgency_html = '<div class="urgency-banner">⚠ COUNTER-SIGNAL — REVIEW POSITION</div>' if is_urgent else ""
-            summary_html = (
-                f'<div style="margin-top:0.7rem;font-size:0.82rem;color:#7a9ab8;'
-                f'font-family:IBM Plex Sans,sans-serif;line-height:1.5;">{summary}</div>'
-                if summary else ""
+
+            badge_html, card_class = recommended_action_badge(analysis)
+            classes    = f"signal-card-compact {card_class}" + (" urgent" if is_urgent else "")
+            state_badge = signal_state_badge(sig_state, sig_age)
+            pos_badge   = position_state_badge(pos_state)
+            source_badge = f'<span class="badge badge-source">{source}</span>'
+
+            mkt = result.get("market_cap_gbp") or company.get("market_cap_gbp")
+            mkt_str   = format_market_cap(mkt)
+            price_html = format_price_info(result.get("price_pence"), result.get("price_change"))
+
+            urgency_html = (
+                '<div class="urgency-banner">⚠ COUNTER-SIGNAL — REVIEW POSITION</div>'
+                if is_urgent else ""
             )
+
             card_html = (
-                f'<div class="signal-card {classes}">'
+                f'<div class="{classes}">'
                 f'{urgency_html}'
-                f'<div><span class="card-ticker">{ticker}</span>'
-                f'<span class="card-company">{result.get("company_name", "")}</span></div>'
-                f'<div class="card-headline">{result.get("headline", "—")}</div>'
-                f'<div class="card-meta">{format_timestamp(result.get("analysed_at", ""))}</div>'
-                f'<div>{badge_html}{source_badge}{state_badge}{pos_badge}</div>'
-                f'{summary_html}'
+                f'<div class="card-row-top">'
+                f'<span><span class="card-ticker">{ticker}</span>'
+                f'<span class="card-company">{co_name}</span></span>'
+                f'<span class="card-market">{mkt_str} &nbsp;·&nbsp; {price_html}</span>'
+                f'</div>'
+                f'<div class="card-headline">{headline}</div>'
+                f'<div class="card-meta">{format_timestamp(analysed_at)} &nbsp;·&nbsp; {source}</div>'
+                f'<div class="card-badges">{badge_html}{state_badge}{pos_badge}</div>'
                 f'</div>'
             )
             st.markdown(card_html, unsafe_allow_html=True)
 
-            col_analysis, col_act, col_defer, col_decline, col_hist, col_dismiss = st.columns(
-                [5, 1, 1, 1, 1, 1]
+            col_exp, col_act, col_defer, col_decline, col_dismiss, col_hist = st.columns(
+                [4, 1, 1, 1, 1, 1]
             )
-
-            with col_analysis:
-                with st.expander("Full analysis"):
+            with col_exp:
+                with st.expander("Summary + Full analysis"):
+                    if summary:
+                        st.markdown(
+                            f'<div style="font-size:0.85rem;color:#a0c0d8;font-family:IBM Plex Sans,'
+                            f'sans-serif;line-height:1.6;margin-bottom:0.8rem;">{summary}</div>',
+                            unsafe_allow_html=True,
+                        )
                     parsed = parse_analysis(analysis)
-                    formatted = "\n".join(
-                        f"{k}: {v}" if k else v
-                        for k, v in parsed
-                    )
+                    formatted = "\n".join(f"{k}: {v}" if k else v for k, v in parsed)
                     st.markdown(f'<div class="analysis-block">{formatted}</div>', unsafe_allow_html=True)
 
             with col_act:
-                act_label = "✓ Acted" if pos_state == "acted" else "Act"
-                if st.button(act_label, key=f"pos_act_{doc_id}"):
+                lbl = "✓ Acted" if pos_state == "acted" else "Act"
+                if st.button(lbl, key=f"act_{doc_id}",
+                             help="Record that you have taken a position. Counter-signals on this company will be surfaced as urgent."):
                     set_position_state(db, ticker, "acted")
                     st.rerun()
 
             with col_defer:
-                defer_label = "⏸ Defer" if pos_state == "deferred" else "Defer"
-                if st.button(defer_label, key=f"pos_defer_{doc_id}"):
+                lbl = "⏸ Deferred" if pos_state == "deferred" else "Defer"
+                if st.button(lbl, key=f"defer_{doc_id}",
+                             help="Interested but not acting now. Useful for pipeline companies or illiquid situations."):
                     set_position_state(db, ticker, "deferred")
                     st.rerun()
 
             with col_decline:
-                decline_label = "✗ Pass" if pos_state == "declined" else "Pass"
-                if st.button(decline_label, key=f"pos_decline_{doc_id}"):
+                lbl = "✗ Declined" if pos_state == "declined" else "Decline"
+                if st.button(lbl, key=f"decline_{doc_id}",
+                             help="Record that you have decided against this opportunity. The company remains monitored and new signals will still appear."):
                     set_position_state(db, ticker, "declined")
+                    st.rerun()
+
+            with col_dismiss:
+                if st.button("Dismiss", key=f"dismiss_{doc_id}",
+                             help="Permanently delete this result. Use for noise — announcements that should not have surfaced. The company remains monitored."):
+                    delete_signal_result(db, doc_id)
                     st.rerun()
 
             with col_hist:
                 hist_key = f"show_hist_{doc_id}"
                 if hist_key not in st.session_state:
                     st.session_state[hist_key] = False
-                hist_label = "Hist ▲" if st.session_state[hist_key] else "Hist"
-                if st.button(hist_label, key=f"hist_btn_{doc_id}"):
+                lbl = "Hist ▲" if st.session_state[hist_key] else "Hist"
+                if st.button(lbl, key=f"hist_{doc_id}",
+                             help="Show the full signal state transition history for this company."):
                     st.session_state[hist_key] = not st.session_state[hist_key]
-                    st.rerun()
-
-            with col_dismiss:
-                if st.button("Dismiss", key=f"dismiss_signal_{doc_id}"):
-                    dismiss_document(db, "signal_results", doc_id)
                     st.rerun()
 
             if st.session_state.get(f"show_hist_{doc_id}"):
@@ -513,21 +630,42 @@ with tab_signals:
                 else:
                     rows = []
                     for h in history:
-                        ts = format_timestamp(h.get("timestamp", ""))
-                        prev = h.get("previous_state", "—")
-                        new = h.get("new_state", "—")
+                        ts       = format_timestamp(h.get("timestamp", ""))
+                        prev     = h.get("previous_state", "—")
+                        nxt      = h.get("new_state", "—")
                         strength = h.get("signal_strength", "")
-                        lens = h.get("lens", "")
-                        strength_html = f" &nbsp;·&nbsp; {strength}" if strength else ""
-                        lens_html = f" &nbsp;·&nbsp; {lens}" if lens else ""
+                        lens     = h.get("lens", "")
+                        s_html   = f" &nbsp;·&nbsp; {strength}" if strength else ""
+                        l_html   = f" &nbsp;·&nbsp; {lens}" if lens else ""
                         rows.append(
                             f'<div class="history-row">'
                             f'<span class="hist-ts">{ts}</span>'
-                            f' &nbsp;·&nbsp; <span class="hist-states">{prev} → {new}</span>'
-                            f"{strength_html}{lens_html}"
+                            f' &nbsp;·&nbsp; <span class="hist-states">{prev} → {nxt}</span>'
+                            f'{s_html}{l_html}'
                             f'</div>'
                         )
                     st.markdown("".join(rows), unsafe_allow_html=True)
+
+        # ── Render groups
+        if grp_urgent:
+            with st.expander(f"🚨  Urgent — {len(grp_urgent)}", expanded=True):
+                for item in grp_urgent:
+                    _render_signal_card(*item)
+
+        if grp_action:
+            with st.expander(f"⬆  Action Required — {len(grp_action)}", expanded=True):
+                for item in grp_action:
+                    _render_signal_card(*item)
+
+        if grp_monitor:
+            with st.expander(f"◉  Monitor — {len(grp_monitor)}", expanded=True):
+                for item in grp_monitor:
+                    _render_signal_card(*item)
+
+        if not hide_no_action and grp_no_action:
+            with st.expander(f"—  No action — {len(grp_no_action)}", expanded=False):
+                for item in grp_no_action:
+                    _render_signal_card(*item)
 
 # ── Discovery tab ──────────────────────────────────────────────────────────────
 
