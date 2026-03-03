@@ -46,16 +46,17 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 ├── SOBER_ASSESSMENT_v1.md            # Post-PoC evaluation — gaps and upgrade path
 ├── .gitignore
 ├── backend/
-│   ├── abstractions.py               # All seven abstract base classes + dataclasses
+│   ├── abstractions.py               # All seven abstract base classes + dataclasses (incl. signal/position state fields)
 │   ├── pipeline.py                   # Core signal pipeline orchestration — daily cron entry point
 │   ├── job_runner.py                 # Interactive job queue worker — polls Firestore pending_jobs
+│   ├── signal_state.py               # Pure state transition engine — classify_signal_strength, compute_signal_transition, compute_decay_transitions
 │   ├── lseg_excel_provider.py        # AnnouncementProviderBase — LSEG Excel ingestion
 │   ├── import_universe_csv.py        # Manual universe import: CSV → CH lookup → Firestore
 │   ├── universe.py                   # Static 5-company list — reference only, not used by pipeline
 │   ├── lens_base_filters.py          # Shared universe pre-filter (passes_universe_filter)
 │   ├── lens_regulatory_catalyst.py   # Strategy Lens: regulatory/planning catalysts
 │   ├── storage_firestore.py          # StorageProviderBase implementation (Firestore)
-│   ├── storage_firestore_universe.py # UniverseStorageProviderBase implementation (Firestore)
+│   ├── storage_firestore_universe.py # UniverseStorageProviderBase implementation (Firestore) — incl. signal/position state methods
 │   ├── market_data_yfinance.py       # MarketDataProviderBase implementation (dormant)
 │   ├── llm_gemini.py                 # LLMProviderBase implementation
 │   ├── telegram_notifier.py          # NotificationProviderBase implementation
@@ -69,7 +70,12 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 │   ├── requirements.txt              # Python dependencies
 │   └── .env                          # API keys — never commit, VM only
 ├── frontend/
-│   ├── app.py                        # Streamlit interface — three tabs: Signals, Discovery, Ingest
+│   ├── app.py                        # Streamlit interface — five tabs: Signals, Discovery, Universe, Ingest, Config
+│   ├── constants.py                  # EMOJI_MUTE, config keys, default lists, outcome styles
+│   ├── ui_helpers.py                 # parse_analysis, badges, format_timestamp
+│   ├── parse_helpers.py              # _parse_lseg_excel, _parse_universe_csv, _compute_universe_delta, _filter_announcement_rows
+│   ├── firestore_helpers.py          # All Firestore functions (get_db, cached queries, writes)
+│   ├── lseg_scraper.py               # Playwright scraper — fetch_announcement_body, fetch_announcement_index (three-index: MCX/SMX/AXX)
 │   └── requirements.txt              # Streamlit Community Cloud dependencies
 └── docs/
     ├── AIM_data_complete_*.csv        # AIM universe source (date-versioned)
@@ -97,10 +103,13 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 | `announcements` | SHA-256 headline fingerprints for cross-run deduplication |
 | `signal_results` | Signal queue LLM analysis results |
 | `discovery_results` | Discovery queue LLM analysis results |
-| `universe_companies` | One document per company, keyed by `ticker_lse` |
+| `universe_companies` | One document per company, keyed by `ticker_lse`; carries `signal_state`, `position_state` and related timestamp fields |
+| `universe_companies/{ticker}/signal_history` | Subcollection — one doc per signal state transition (timestamp, previous/new state, trigger, lens, strength, confidence) |
+| `universe_companies/{ticker}/position_history` | Subcollection — one doc per position state change (timestamp, previous/new state, reason) |
 | `universe_refresh_log` | One document per pipeline refresh run |
 | `pending_jobs` | Interactive ingestion job queue — written by UI, consumed by job_runner |
-| `app_config` | Application configuration — document `lseg_filters` holds `excluded_announcement_types` list; seeded from `_DEFAULT_EXCLUDED_TYPES` on first app load, editable live via Sidebar → Filtration Rules |
+| `app_config/lseg_filters` | Exclusion lists — `excluded_announcement_types`, `excluded_company_keywords`; seeded from defaults on first app load, editable live via Sidebar → Filtration Rules |
+| `app_config/signal_config` | Signal decay window config — seeded on first call with defaults (`_DEFAULT_SIGNAL_CONFIG` in `storage_firestore_universe.py`); editable in Firestore |
 
 ---
 
@@ -208,9 +217,8 @@ making it immediately obvious whether a deploy has taken effect.
 ## Current Build Status
 
 The signal pipeline is fully operational end-to-end. All seven abstractions are
-implemented. The universe is live in Firestore with 845 companies. An interactive
-ingestion workflow (LSEG Excel → Firestore job queue) has been added alongside
-the autonomous cron pipeline.
+implemented. The universe is live in Firestore with 847 companies. Phase 1 (LSEG
+Playwright scraping) and Phase 2a/2b (signal/position state model) are complete.
 
 **Universe management (static CSV approach):**
 - `docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv` are the
@@ -218,20 +226,31 @@ the autonomous cron pipeline.
 - `import_universe_csv.py` imports CSVs → runs CH lookup → writes to Firestore.
   Re-run whenever CSVs are updated. Takes ~8–9 minutes (CH API rate limit).
 - No market cap ceiling enforced in code — file is pre-filtered at source
-  (e.g. via LSEG screener) before being committed to docs/. 845 companies
-  currently admitted (547 AIM + 298 FTSE).
+  (e.g. via LSEG screener) before being committed to docs/. 847 companies
+  currently admitted (93 muted, excluded from pipeline).
 - `pipeline.py` reads the universe from Firestore at startup. **Raises RuntimeError
   if Firestore is empty** — there is no fallback to `universe.py`. Run
   `import_universe_csv.py` before the first pipeline run.
 
+**Signal/position state model (Phase 2a/2b — complete):**
+- Two-axis state model: signal state (system-managed) and position state (human-managed).
+- Signal states: `watching` → `monitor` → `signal_active` → `signal_reinforced` / `signal_mixed` / `signal_negative`
+- `signal_state.py` — pure transition engine (no Firestore). `classify_signal_strength`,
+  `compute_signal_transition`, `compute_decay_transitions`. Self-tests: run `python signal_state.py`.
+- State transitions fire after every `save_signal_result` in both `pipeline.py` and `job_runner.py`.
+- Decay check runs at end of each pipeline run; history recorded to subcollections.
+
 **News ingestion — two paths:**
-- **Autonomous (cron):** `CompaniesHouseProvider` fetches filing history for the 671
+- **Autonomous (cron):** `CompaniesHouseProvider` fetches filing history for 673
   CH-matched universe companies daily. Rate-limited at 0.6s/request. Produces
   secondary confirmation of RNS events (see `SOBER_ASSESSMENT_v1.md`).
-- **Interactive (job queue):** Human exports RNS announcements from LSEG web
-  interface, uploads Excel to the Ingest tab, selects items, pastes body text.
-  `job_runner.py` on the VM picks up the job from `pending_jobs` and runs full
-  LLM analysis. This path accesses primary RNS disclosure.
+- **Interactive (Playwright + job queue):** "Fetch from LSEG" button in Ingest tab
+  scrapes the LSEG News Explorer via headless Chromium (`lseg_scraper.py`). Makes
+  three targeted fetches — MCX (FTSE 250), SMX (FTSE Small Cap), AXX (FTSE AIM
+  All-Share) — each well under the 500-row daily limit. Results merged and
+  deduplicated on `source_url`. User selects rows; "Fetch & Analyse" fetches the
+  full body and submits an `lseg_ingest` job. `job_runner.py` on the VM runs full
+  LLM analysis. Excel upload retained as fallback.
 - **Parked:** `GoogleNewsProvider` and `newsapi_connector.py` — structurally late
   relative to RNS; assessed as solving the wrong problem. See HANDOVER.md.
 
@@ -316,20 +335,25 @@ Pre-filtering happens in two stages before LLM calls (to save cost and latency):
 
 ### Frontend (`frontend/app.py`)
 
-Streamlit dashboard with three tabs:
+Streamlit dashboard with five tabs:
 - **Signals** — actionable opportunities with full LLM output, dismiss capability
-- **Discovery Queue** — universe admission candidates
-- **Ingest** — LSEG Excel upload → pre-filter → body-paste → job submission → job status
+- **Discovery** — universe admission candidates
+- **Universe** — company list management; CSV import with delta preview; mute/remove
+- **Ingest** — "Fetch from LSEG" button + Excel fallback; row filter/sort; inline body-fetch + job submission
+- **Config** — exclusion list editor (announcement types + company keywords)
 
 Sidebar: Universe Lookup (membership, CH confidence, signal count, most recent signal).
 
-Reads/writes Firestore directly. No backend imports. Deployable to Streamlit Community
-Cloud — credential loader tries `st.secrets["gcp_service_account"]` first, falls back
-to `GOOGLE_APPLICATION_CREDENTIALS` env var for local development.
+Split into modules: `constants.py`, `ui_helpers.py`, `parse_helpers.py`, `firestore_helpers.py`, `lseg_scraper.py`.
+
+Reads/writes Firestore directly. No backend imports. Runs locally (WSL2) — Community
+Cloud deployment possible but LSEG Playwright scraping requires local machine. Credential
+loader tries `st.secrets["gcp_service_account"]` first, falls back to
+`GOOGLE_APPLICATION_CREDENTIALS` env var for local development.
 
 ### Monitored Universe
 
-845 LSE small-cap companies stored in Firestore (`universe_companies` collection),
+847 LSE small-cap companies stored in Firestore (`universe_companies` collection),
 loaded at pipeline startup via `FirestoreUniverseProvider`. Sourced from
 `docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv`, imported
 via `import_universe_csv.py`. Each company carries a `companies_house_number` and

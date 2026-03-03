@@ -19,14 +19,18 @@ from LSEG directly via Playwright.
 
 **Delivered:** v2.20–2.31 (2 March 2026)
 
-**Confirmed figures (2 Mar 2026):** 471 total rows · 83 non-RNS skipped · 54 passed ·
-200 non-universe skipped · 134 suppressed.
+**Confirmed figures (2 Mar 2026, three-index fetch):** 362 rows total (MCX 170 + SMX 98 + AXX 95,
+after dedup) · 54 passed · ~200 non-universe skipped · ~134 suppressed.
+(Earlier bare-URL single-fetch figures — 471 rows, 83 non-RNS skipped — are superseded by the
+three-index approach, which provides complete daily coverage without hitting the 500-row cap.)
 
 ### Implementation notes
 
-- **URL:** bare `https://www.londonstockexchange.com/news?tab=news-explorer` — no
-  filter params. Angular URL filter params (`?indices=MCX&period=today`) cause "no
-  results" in headless mode; date and index filtering is done in Python instead.
+- **URL:** `https://www.londonstockexchange.com/news?tab=news-explorer&indices=MCX`
+  (repeated for `SMX` and `AXX`). Three targeted fetches, one per market segment,
+  each staying well under 500 rows/day. The `&indices=` param works reliably headless;
+  `&period=today` does NOT — it causes "no results" in headless mode and is never appended.
+  Date filtering is applied in Python after scraping.
 - **Pagination:** `#dropdownSize` ng-select; wait for `.ng-dropdown-panel` to render,
   click `.ng-dropdown-panel .ng-option` matching "500", wait for `tr.slide-panel`
   count > 20.
