@@ -179,23 +179,33 @@ def _parse_universe_csv(file_bytes: bytes) -> list:
     """
     Parse a universe CSV file and return a list of company dicts.
 
-    Expected columns: Exchange, Code, Name, Market Cap
+    Accepts comma- or tab-separated files. Header matching is case-insensitive.
+    Expected columns: Exchange, Code, Name, Market Cap / Market Cap (m) / Market cap (m)
     Exchange: "AIM" → "AIM", anything else → "LSE_MAIN"
     Market Cap: in millions GBP; strip commas and multiply by 1,000,000.
     Rows missing ticker or name are skipped.
     """
     content = file_bytes.decode("utf-8-sig")
-    reader = csv.DictReader(io.StringIO(content))
+    # Auto-detect delimiter: use tab if the first line contains tabs
+    first_line = content.split("\n", 1)[0]
+    delimiter = "\t" if "\t" in first_line else ","
+    reader = csv.DictReader(io.StringIO(content), delimiter=delimiter)
     companies = []
     for row in reader:
-        ticker = (row.get("Code") or "").strip()
-        name = (row.get("Name") or "").strip()
+        # Case-insensitive header lookup
+        row_ci = {k.strip().lower(): v for k, v in row.items()}
+        ticker = (row_ci.get("code") or "").strip()
+        name = (row_ci.get("name") or "").strip()
         if not ticker or not name:
             continue
-        exchange_raw = (row.get("Exchange") or "").strip()
+        exchange_raw = (row_ci.get("exchange") or "").strip()
         listing_exchange = "AIM" if exchange_raw.upper() == "AIM" else "LSE_MAIN"
         tier = 2 if listing_exchange == "AIM" else 1
-        mcap_raw = (row.get("Market Cap") or row.get("Market Cap (m)") or "").strip().replace(",", "")
+        mcap_raw = (
+            row_ci.get("market cap")
+            or row_ci.get("market cap (m)")
+            or ""
+        ).strip().replace(",", "")
         try:
             market_cap_gbp = float(mcap_raw) * 1_000_000 if mcap_raw else None
         except ValueError:
@@ -229,6 +239,6 @@ def _compute_universe_delta(parsed_rows: list, existing_companies: list) -> dict
     update_companies = [r for r in parsed_rows if r["ticker"].upper() in existing_by_ticker]
     absent_companies = [
         c for c in existing_companies
-        if c.get("ticker_lse", "").upper() not in parsed_tickers
+        if c.get("ticker_lse") and c.get("ticker_lse", "").upper() not in parsed_tickers
     ]
     return {"new": new_companies, "update": update_companies, "absent": absent_companies}
