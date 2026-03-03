@@ -40,7 +40,7 @@ def get_db():
 
 # ── Signal / discovery results ─────────────────────────────────────────────────
 
-def get_signal_results(db, limit=100):
+def get_signal_results(db, limit=500):
     docs = (
         db.collection("signal_results")
         .where("dismissed", "==", False)
@@ -51,7 +51,7 @@ def get_signal_results(db, limit=100):
     return [(doc.id, doc.to_dict()) for doc in docs]
 
 
-def get_signal_results_all(db, limit=100):
+def get_signal_results_all(db, limit=500):
     """Fallback — fetch all and filter in Python if index not yet built."""
     docs = (
         db.collection("signal_results")
@@ -60,6 +60,23 @@ def get_signal_results_all(db, limit=100):
         .stream()
     )
     return [(doc.id, d) for doc in docs if not (d := doc.to_dict()).get("dismissed", False)]
+
+
+def get_all_signals_for_ticker(db, ticker: str) -> list:
+    """
+    Return all non-dismissed signal_results for a specific ticker, newest first.
+
+    Used as a top-up pass to guarantee acted/deferred positions remain visible
+    regardless of the main fetch limit. Single-field equality filter — no composite
+    index required.
+    """
+    docs = db.collection("signal_results").where("ticker", "==", ticker).stream()
+    results = [
+        (d.id, d.to_dict()) for d in docs
+        if not d.to_dict().get("dismissed", False)
+    ]
+    results.sort(key=lambda x: str(x[1].get("stored_at", "")), reverse=True)
+    return results
 
 
 def get_discovery_results(db, limit=100):
@@ -137,6 +154,30 @@ def save_company_keywords(db, keywords):
 
 
 # ── Universe helpers ───────────────────────────────────────────────────────────
+
+def cleanup_universe_orphans(db) -> int:
+    """
+    Delete universe_companies documents that have no ticker_lse field.
+
+    These are orphaned documents created by partial writes (e.g. a merge-set
+    that only set market_cap_gbp on a ticker that had no existing document).
+    Returns the number of documents deleted and clears related caches.
+    """
+    deleted = 0
+    try:
+        for doc in db.collection("universe_companies").stream():
+            if not doc.to_dict().get("ticker_lse"):
+                doc.reference.delete()
+                deleted += 1
+        if deleted:
+            get_all_universe_companies.clear()
+            get_universe_tickers.clear()
+            get_not_of_interest_tickers.clear()
+            get_universe_stats.clear()
+    except Exception:
+        pass
+    return deleted
+
 
 @st.cache_data(ttl=300)
 def get_universe_tickers(_db):
@@ -260,13 +301,22 @@ def get_signal_history_for_ticker(_db, ticker: str, limit: int = 10) -> list:
 
 
 def set_position_state(db, ticker: str, state: str) -> None:
-    """Write position_state and position_state_since to a universe_companies doc."""
+    """
+    Write position_state and position_state_since to a universe_companies doc.
+
+    Closing or declining a position also resets signal_state to 'watching' so
+    the company can be evaluated fresh on future signals (per two-axis model spec).
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    update = {
+        "position_state": state,
+        "position_state_since": now_iso,
+    }
+    if state in ("closed", "declined"):
+        update["signal_state"] = "watching"
+        update["signal_state_since"] = now_iso
     db.collection("universe_companies").document(ticker.upper()).set(
-        {
-            "position_state": state,
-            "position_state_since": datetime.now(timezone.utc).isoformat(),
-        },
-        merge=True,
+        update, merge=True,
     )
     get_all_universe_companies.clear()
     get_signal_history_for_ticker.clear()

@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.36"
+VERSION = "2.43"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -341,6 +341,8 @@ from firestore_helpers import (
     get_signal_history_for_ticker,
     set_position_state,
     delete_signal_result,
+    cleanup_universe_orphans,
+    get_all_signals_for_ticker,
 )
 from parse_helpers import (
     _parse_lseg_excel, _parse_universe_csv, _compute_universe_delta,
@@ -395,6 +397,19 @@ company_map = {
     for c in get_all_universe_companies(db)
     if c.get("ticker_lse")
 }
+
+# Top-up pass: guarantee acted/deferred signals are always visible regardless of
+# the main fetch limit. Identifies any acted/deferred tickers absent from the
+# result set and fetches their most recent signal directly.
+_priority_tickers = {
+    t for t, c in company_map.items()
+    if c.get("position_state") in ("acted", "deferred")
+}
+_loaded_tickers = {(r.get("ticker") or "").upper() for _, r in signals}
+for _t in sorted(_priority_tickers - _loaded_tickers):
+    _fresh = get_all_signals_for_ticker(db, _t)
+    if _fresh:
+        signals.append(_fresh[0])
 
 # Count actionable items
 action_count = sum(
@@ -455,7 +470,7 @@ with tab_signals:
     with fc1:
         pos_filter = st.radio(
             "Position",
-            ["All", "Unreviewed", "Acted", "Deferred", "Declined"],
+            ["All", "Unreviewed", "Acted", "Deferred", "Declined", "Closed"],
             horizontal=True,
             key="sig_pos_filter",
         )
@@ -485,6 +500,13 @@ with tab_signals:
         if pos_filter == "Deferred" and pos != "deferred":
             return False
         if pos_filter == "Declined" and pos != "declined":
+            return False
+        if pos_filter == "Closed"   and pos != "closed":
+            return False
+        # Declined and Closed are hidden from all views except their explicit filter
+        if pos == "declined" and pos_filter != "Declined":
+            return False
+        if pos == "closed" and pos_filter != "Closed":
             return False
         if since_cutoff:
             try:
@@ -571,8 +593,8 @@ with tab_signals:
             )
             st.markdown(card_html, unsafe_allow_html=True)
 
-            col_exp, col_act, col_defer, col_decline, col_dismiss, col_hist = st.columns(
-                [4, 1, 1, 1, 1, 1]
+            col_exp, col_act, col_defer, col_decline, col_close, col_dismiss, col_hist = st.columns(
+                [4, 1, 1, 1, 1, 1, 1]
             )
             with col_exp:
                 with st.expander("Summary + Full analysis"):
@@ -586,32 +608,48 @@ with tab_signals:
                     formatted = "\n".join(f"{k}: {v}" if k else v for k, v in parsed)
                     st.markdown(f'<div class="analysis-block">{formatted}</div>', unsafe_allow_html=True)
 
+            # ── Position state buttons — only valid transitions shown per state ──
+            # None / Closed : Act · Defer · Decline · Dismiss  (Closed = back to neutral)
+            # Acted         : Close
+            # Deferred      : Act · Decline · Dismiss
+            # Declined      : Dismiss
+
             with col_act:
-                lbl = "✓ Acted" if pos_state == "acted" else "Act"
-                if st.button(lbl, key=f"act_{doc_id}",
-                             help="Record that you have taken a position. Counter-signals on this company will be surfaced as urgent."):
-                    set_position_state(db, ticker, "acted")
-                    st.rerun()
+                if pos_state in ("", None, "closed", "deferred"):
+                    help_txt = ("Proceed — record that you have taken a position."
+                                if pos_state == "deferred"
+                                else "Record that you have taken a position. Counter-signals will be surfaced as urgent.")
+                    if st.button("Act", key=f"act_{doc_id}", help=help_txt):
+                        set_position_state(db, ticker, "acted")
+                        st.rerun()
 
             with col_defer:
-                lbl = "⏸ Deferred" if pos_state == "deferred" else "Defer"
-                if st.button(lbl, key=f"defer_{doc_id}",
-                             help="Interested but not acting now. Useful for pipeline companies or illiquid situations."):
-                    set_position_state(db, ticker, "deferred")
-                    st.rerun()
+                if pos_state in ("", None, "closed"):
+                    if st.button("Defer", key=f"defer_{doc_id}",
+                                 help="Interested but not acting now. Useful for pipeline companies or illiquid situations."):
+                        set_position_state(db, ticker, "deferred")
+                        st.rerun()
 
             with col_decline:
-                lbl = "✗ Declined" if pos_state == "declined" else "Decline"
-                if st.button(lbl, key=f"decline_{doc_id}",
-                             help="Record that you have decided against this opportunity. The company remains monitored and new signals will still appear."):
-                    set_position_state(db, ticker, "declined")
-                    st.rerun()
+                if pos_state in ("", None, "closed", "deferred"):
+                    if st.button("Decline", key=f"decline_{doc_id}",
+                                 help="Pass on this opportunity. Signal state resets — the company remains monitored for future signals."):
+                        set_position_state(db, ticker, "declined")
+                        st.rerun()
+
+            with col_close:
+                if pos_state == "acted":
+                    if st.button("Close", key=f"close_{doc_id}",
+                                 help="Record that you have exited this position. Signal state resets to Watching so the company can be re-evaluated on future signals."):
+                        set_position_state(db, ticker, "closed")
+                        st.rerun()
 
             with col_dismiss:
-                if st.button("Dismiss", key=f"dismiss_{doc_id}",
-                             help="Permanently delete this result. Use for noise — announcements that should not have surfaced. The company remains monitored."):
-                    delete_signal_result(db, doc_id)
-                    st.rerun()
+                if pos_state in ("", None, "closed", "deferred", "declined"):
+                    if st.button("Dismiss", key=f"dismiss_{doc_id}",
+                                 help="Permanently delete this signal result. Use for noise — the company remains monitored."):
+                        delete_signal_result(db, doc_id)
+                        st.rerun()
 
             with col_hist:
                 hist_key = f"show_hist_{doc_id}"
@@ -783,14 +821,15 @@ with tab_universe:
     # Page size — reset page on any filter change
     page_size = st.selectbox("Rows per page", [25, 50, 100], key="universe_page_size")
 
-    # Load and filter companies
+    # Remove orphaned documents (no ticker_lse field) then load companies
+    cleanup_universe_orphans(db)
     try:
         all_companies = get_all_universe_companies(db)
     except Exception as e:
         all_companies = []
         st.caption(f"Could not load universe: {e}")
 
-    filtered = all_companies
+    filtered = [c for c in all_companies if c.get("ticker_lse")]
     if not show_muted:
         filtered = [c for c in filtered if not c.get("not_of_interest", False)]
     if exchange_filter == "AIM":
