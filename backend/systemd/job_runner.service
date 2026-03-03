@@ -11,6 +11,7 @@ WorkingDirectory=/home/danjmorris/stock-research/backend
 ExecStart=/home/danjmorris/stock-research/backend/venv/bin/python job_runner.py
 Restart=on-failure
 RestartSec=15s
+Environment=PYTHONUNBUFFERED=1
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=job_runner
