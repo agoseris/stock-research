@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.31"
+VERSION = "2.32"
 
 # ── Page config ────────────────────────────────────────────────────────────────
 
@@ -183,6 +183,44 @@ html, body, [class*="css"] {
 .badge-maybe { background: #0a1f14; color: #4af7a0; border: 1px solid #4af7a044; }
 .badge-source { background: #111820; color: #3d5166; border: 1px solid #1a253544; }
 
+/* Signal state badges */
+.badge-state-watching   { background: #0e1a26; color: #3d5166; border: 1px solid #1a253544; }
+.badge-state-monitor    { background: #0a1525; color: #7eb8f7; border: 1px solid #7eb8f744; }
+.badge-state-active     { background: #2a1f0a; color: #f7a84a; border: 1px solid #f7a84a44; }
+.badge-state-reinforced { background: #2a280a; color: #ffca28; border: 1px solid #ffca2844; }
+.badge-state-mixed      { background: #2a230a; color: #ffd740; border: 1px solid #ffd74044; }
+.badge-state-negative   { background: #2a0a0a; color: #e55353; border: 1px solid #e5535344; }
+
+/* Position state badges */
+.badge-pos-acted    { background: #0a2a1a; color: #4af7a0; border: 1px solid #4af7a044; }
+.badge-pos-deferred { background: #2a2a0a; color: #f7e14a; border: 1px solid #f7e14a44; }
+.badge-pos-declined { background: #0e1a26; color: #4a6080; border: 1px solid #1a253544; }
+.badge-pos-closed   { background: #0e1a26; color: #3d5166; border: 1px solid #1a253544; }
+
+/* Urgency card variant */
+.signal-card.urgent { border-left-color: #e55353 !important; background: #140c0c; }
+.urgency-banner {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.62rem;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #e55353;
+    margin-bottom: 0.6rem;
+}
+
+/* Signal history row */
+.history-row {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.64rem;
+    color: #4a6080;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid #0f1a26;
+    line-height: 1.6;
+}
+.hist-ts { color: #2d3f52; }
+.hist-states { color: #7a9ab8; }
+
 /* Analysis block */
 .analysis-block {
     background: #080c12;
@@ -265,6 +303,8 @@ from firestore_helpers import (
     get_pending_jobs,
     _get_processed_source_urls,
     submit_job,
+    get_signal_history_for_ticker,
+    set_position_state,
 )
 from parse_helpers import (
     _parse_lseg_excel, _parse_universe_csv, _compute_universe_delta,
@@ -276,6 +316,8 @@ from ui_helpers import (
     recommended_action_badge,
     recommend_add_badge,
     format_timestamp,
+    signal_state_badge,
+    position_state_badge,
 )
 
 try:
@@ -306,6 +348,14 @@ try:
     discoveries = get_discovery_results(db)
 except Exception:
     discoveries = get_discovery_results_all(db)
+
+# Build a ticker → company dict for signal/position state lookups in the Signals tab.
+# Uses the cached bulk fetch — no extra Firestore reads.
+company_map = {
+    c["ticker_lse"].upper(): c
+    for c in get_all_universe_companies(db)
+    if c.get("ticker_lse")
+}
 
 # Count actionable items
 action_count = sum(
@@ -364,31 +414,58 @@ with tab_signals:
     if not signals:
         st.markdown('<div class="empty-state">NO SIGNALS · Pipeline has not surfaced any results yet</div>', unsafe_allow_html=True)
     else:
-        def signal_sort_key(item):
-            val = get_field(item[1].get("llm_analysis", ""), "RECOMMENDED_ACTION").lower()
-            return {"yes": 0, "monitor": 1}.get(val, 2)
+        def _signal_sort_key(item):
+            doc_id, result = item
+            ticker = result.get("ticker", "").upper()
+            company = company_map.get(ticker, {})
+            pos = company.get("position_state") or ""
+            sig = company.get("signal_state") or "watching"
+            # Acted + counter-signal → surface at top with maximum urgency
+            if pos == "acted" and sig in ("signal_negative", "signal_mixed"):
+                return 0
+            val = get_field(result.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower()
+            return {"yes": 1, "monitor": 2}.get(val, 3)
 
-        for doc_id, result in sorted(signals, key=signal_sort_key):
+        for doc_id, result in sorted(signals, key=_signal_sort_key):
             analysis = result.get("llm_analysis", "")
+            ticker = result.get("ticker", "—")
             badge_html, card_class = recommended_action_badge(analysis)
             summary = get_field(analysis, "SUMMARY")
             source_badge = f'<span class="badge badge-source">{result.get("source", "—")}</span>'
 
+            company = company_map.get(ticker.upper(), {})
+            sig_state = company.get("signal_state") or "watching"
+            pos_state = company.get("position_state") or ""
+
+            state_badge = signal_state_badge(sig_state)
+            pos_badge = position_state_badge(pos_state)
+
+            is_urgent = pos_state == "acted" and sig_state in ("signal_negative", "signal_mixed")
+            classes = f"{card_class} urgent" if is_urgent else card_class
+            urgency_html = (
+                '<div class="urgency-banner">⚠ COUNTER-SIGNAL — REVIEW POSITION</div>'
+                if is_urgent else ""
+            )
+
             st.markdown(f"""
-<div class="signal-card {card_class}">
+<div class="signal-card {classes}">
+    {urgency_html}
     <div>
-        <span class="card-ticker">{result.get("ticker", "—")}</span>
+        <span class="card-ticker">{ticker}</span>
         <span class="card-company">{result.get("company_name", "")}</span>
     </div>
     <div class="card-headline">{result.get("headline", "—")}</div>
     <div class="card-meta">{format_timestamp(result.get("analysed_at", ""))}</div>
-    <div>{badge_html}{source_badge}</div>
+    <div>{badge_html}{source_badge}{state_badge}{pos_badge}</div>
     {f'<div style="margin-top:0.7rem;font-size:0.82rem;color:#7a9ab8;font-family:IBM Plex Sans,sans-serif;line-height:1.5;">{summary}</div>' if summary else ''}
 </div>
 """, unsafe_allow_html=True)
 
-            col1, col2 = st.columns([8, 1])
-            with col1:
+            col_analysis, col_act, col_defer, col_decline, col_hist, col_dismiss = st.columns(
+                [5, 1, 1, 1, 1, 1]
+            )
+
+            with col_analysis:
                 with st.expander("Full analysis"):
                     parsed = parse_analysis(analysis)
                     formatted = "\n".join(
@@ -396,10 +473,61 @@ with tab_signals:
                         for k, v in parsed
                     )
                     st.markdown(f'<div class="analysis-block">{formatted}</div>', unsafe_allow_html=True)
-            with col2:
+
+            with col_act:
+                act_label = "✓ Acted" if pos_state == "acted" else "Act"
+                if st.button(act_label, key=f"pos_act_{doc_id}"):
+                    set_position_state(db, ticker, "acted")
+                    st.rerun()
+
+            with col_defer:
+                defer_label = "⏸ Defer" if pos_state == "deferred" else "Defer"
+                if st.button(defer_label, key=f"pos_defer_{doc_id}"):
+                    set_position_state(db, ticker, "deferred")
+                    st.rerun()
+
+            with col_decline:
+                decline_label = "✗ Pass" if pos_state == "declined" else "Pass"
+                if st.button(decline_label, key=f"pos_decline_{doc_id}"):
+                    set_position_state(db, ticker, "declined")
+                    st.rerun()
+
+            with col_hist:
+                hist_key = f"show_hist_{doc_id}"
+                if hist_key not in st.session_state:
+                    st.session_state[hist_key] = False
+                hist_label = "Hist ▲" if st.session_state[hist_key] else "Hist"
+                if st.button(hist_label, key=f"hist_btn_{doc_id}"):
+                    st.session_state[hist_key] = not st.session_state[hist_key]
+                    st.rerun()
+
+            with col_dismiss:
                 if st.button("Dismiss", key=f"dismiss_signal_{doc_id}"):
                     dismiss_document(db, "signal_results", doc_id)
                     st.rerun()
+
+            if st.session_state.get(f"show_hist_{doc_id}"):
+                history = get_signal_history_for_ticker(db, ticker)
+                if not history:
+                    st.caption("No signal history recorded yet for this company.")
+                else:
+                    rows = []
+                    for h in history:
+                        ts = format_timestamp(h.get("timestamp", ""))
+                        prev = h.get("previous_state", "—")
+                        new = h.get("new_state", "—")
+                        strength = h.get("signal_strength", "")
+                        lens = h.get("lens", "")
+                        strength_html = f" &nbsp;·&nbsp; {strength}" if strength else ""
+                        lens_html = f" &nbsp;·&nbsp; {lens}" if lens else ""
+                        rows.append(
+                            f'<div class="history-row">'
+                            f'<span class="hist-ts">{ts}</span>'
+                            f' &nbsp;·&nbsp; <span class="hist-states">{prev} → {new}</span>'
+                            f"{strength_html}{lens_html}"
+                            f'</div>'
+                        )
+                    st.markdown("".join(rows), unsafe_allow_html=True)
 
 # ── Discovery tab ──────────────────────────────────────────────────────────────
 
