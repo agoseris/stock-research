@@ -17,11 +17,13 @@ import os
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 
-# Load credentials — try the backend .env file which carries
-# GOOGLE_APPLICATION_CREDENTIALS.  find_dotenv() walks up from CWD.
-load_dotenv(find_dotenv(filename=".env", raise_error_if_not_found=False))
+# Load credentials from backend/.env relative to the project root.
+# Computed from this file's location so it works regardless of CWD.
+_UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
+load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
 
 _STALE_THRESHOLD_DAYS = 90
 
