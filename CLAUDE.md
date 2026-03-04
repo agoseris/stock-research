@@ -17,21 +17,20 @@ their words.
 
 ---
 
-## Architecture: Seven Abstractions — Non-Negotiable
+## Architecture: Six Abstractions — Non-Negotiable
 
 All components communicate through abstract base class interfaces. Concrete providers
 are instantiated **once at the entry point** and injected. Never instantiate a concrete
 provider inside pipeline logic, the UI layer, or another provider.
 
-| # | Abstraction | PoC Implementation | Purpose |
+| # | Abstraction | Implementation | Purpose |
 |---|---|---|---|
-| 1 | `AnnouncementProviderBase` | `CompaniesHouseProvider` (active), `LSEGExcelProvider` (active), `GoogleNewsProvider` (parked) | News and filing ingestion |
+| 1 | `AnnouncementProviderBase` | `CompaniesHouseProvider` (active), `LSEGExcelProvider` (active) | News and filing ingestion |
 | 2 | `LLMProviderBase` | `GeminiProvider` | Analysis and reasoning |
 | 3 | `NotificationProviderBase` | `TelegramNotifier` | Alert dispatch |
 | 4 | `StorageProviderBase` | `FirestoreProvider` | Signal/discovery results and deduplication |
 | 5 | `StrategyLensBase` | `RegulatoryCatalystLens` | Investment strategy implementation |
-| 6 | `MarketDataProviderBase` | `YFinanceProvider` | Market cap, fundamentals, price, liquidity data |
-| 7 | `UniverseStorageProviderBase` | `FirestoreUniverseProvider` | Universe company list and refresh log |
+| 6 | `UniverseStorageProviderBase` | `FirestoreUniverseProvider` | Universe company list and refresh log |
 
 ---
 
@@ -46,27 +45,21 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 ├── SOBER_ASSESSMENT_v1.md            # Post-PoC evaluation — gaps and upgrade path
 ├── .gitignore
 ├── backend/
-│   ├── abstractions.py               # All seven abstract base classes + dataclasses (incl. signal/position state fields)
+│   ├── abstractions.py               # All six abstract base classes + dataclasses (incl. signal/position state fields)
 │   ├── pipeline.py                   # Core signal pipeline orchestration — daily cron entry point
 │   ├── job_runner.py                 # Interactive job queue worker — polls Firestore pending_jobs
 │   ├── signal_state.py               # Pure state transition engine — classify_signal_strength, compute_signal_transition, compute_decay_transitions
 │   ├── lseg_excel_provider.py        # AnnouncementProviderBase — LSEG Excel ingestion
 │   ├── import_universe_csv.py        # Manual universe import: CSV → CH lookup → Firestore
-│   ├── universe.py                   # Static 5-company list — reference only, not used by pipeline
 │   ├── lens_base_filters.py          # Shared universe pre-filter (passes_universe_filter)
 │   ├── lens_regulatory_catalyst.py   # Strategy Lens: regulatory/planning catalysts
 │   ├── storage_firestore.py          # StorageProviderBase implementation (Firestore)
 │   ├── storage_firestore_universe.py # UniverseStorageProviderBase implementation (Firestore) — incl. signal/position state methods
-│   ├── market_data_yfinance.py       # MarketDataProviderBase implementation (dormant)
 │   ├── llm_gemini.py                 # LLMProviderBase implementation
 │   ├── telegram_notifier.py          # NotificationProviderBase implementation
-│   ├── google_news_connector.py      # AnnouncementProviderBase — GoogleNewsProvider (parked, see HANDOVER.md)
-│   ├── newsapi_connector.py          # AnnouncementProviderBase — NewsAPI aggregator (parked)
 │   ├── companies_house_connector.py  # AnnouncementProviderBase — CH filing ingestion
 │   ├── systemd/
 │   │   └── job_runner.service        # systemd unit for always-on VM operation
-│   ├── tests/
-│   │   └── archive/                  # Archived yfinance tests (see archive/README.md)
 │   ├── requirements.txt              # Python dependencies
 │   └── .env                          # API keys — never commit, VM only
 ├── frontend/
@@ -121,8 +114,6 @@ GEMINI_KEY=
 TELEGRAM_TOKEN=
 TELEGRAM_CHAT_ID=
 GOOGLE_APPLICATION_CREDENTIALS=/home/danjmorris/stock-research/backend/gcp-credentials.json
-GOOGLE_CSE_KEY=        # GCP Console → APIs & Services → Credentials → Create API key
-GOOGLE_CSE_ID=         # programmablesearchengine.google.com → Create engine → Search engine ID
 ```
 
 ---
@@ -166,7 +157,7 @@ making it immediately obvious whether a deploy has taken effect.
 3. **Universe discipline:** the monitored universe is explicit and deliberate.
    Discovery is a separate queue. Admission is a human decision.
 
-4. **Abstraction integrity:** all seven abstractions must be respected.
+4. **Abstraction integrity:** all six abstractions must be respected.
    Concrete providers are injected — never instantiated inline.
 
 5. **Free first, paid when earned:** all PoC work uses free-tier sources.
@@ -211,11 +202,6 @@ making it immediately obvious whether a deploy has taken effect.
   exact match; 0.85–<1.0 = fuzzy. Dissolved/inactive companies are excluded from
   matching regardless of similarity score. The confidence flows through to
   `Announcement.companies_house_confidence` and into LLM prompts as a data quality note.
-- **Google News / CSE parked and reassessed:** All free RSS sources return 503/429/404
-  from GCP IP ranges. Google CSE was also reassessed as solving the wrong problem —
-  news aggregators are structurally late relative to RNS. See `SOBER_ASSESSMENT_v1.md`.
-  `GoogleNewsProvider` is intact but parked. The interactive LSEG Excel path now
-  provides genuine primary RNS access without a paid feed.
 - **Firestore universe is a snapshot:** `save_universe()` deletes stale documents after
   each write. Re-running `import_universe_csv.py` with a tighter filter will correctly
   remove previously-admitted companies from Firestore.
@@ -224,7 +210,7 @@ making it immediately obvious whether a deploy has taken effect.
 
 ## Current Build Status
 
-The signal pipeline is fully operational end-to-end. All seven abstractions are
+The signal pipeline is fully operational end-to-end. All six abstractions are
 implemented. The universe is live in Firestore with 847 companies. Phase 1 (LSEG
 Playwright scraping) and Phase 2a/2b (signal/position state model) are complete.
 
@@ -237,8 +223,7 @@ Playwright scraping) and Phase 2a/2b (signal/position state model) are complete.
   (e.g. via LSEG screener) before being committed to docs/. 847 companies
   currently admitted (93 muted, excluded from pipeline).
 - `pipeline.py` reads the universe from Firestore at startup. **Raises RuntimeError
-  if Firestore is empty** — there is no fallback to `universe.py`. Run
-  `import_universe_csv.py` before the first pipeline run.
+  if Firestore is empty.** Run `import_universe_csv.py` before the first pipeline run.
 
 **Signal/position state model (Phase 2a/2b — complete):**
 - Two-axis state model: signal state (system-managed) and position state (human-managed).
@@ -259,8 +244,6 @@ Playwright scraping) and Phase 2a/2b (signal/position state model) are complete.
   deduplicated on `source_url`. User selects rows; "Fetch & Analyse" fetches the
   full body and submits an `lseg_ingest` job. `job_runner.py` on the VM runs full
   LLM analysis. Excel upload retained as fallback.
-- **Parked:** `GoogleNewsProvider` and `newsapi_connector.py` — structurally late
-  relative to RNS; assessed as solving the wrong problem. See HANDOVER.md.
 
 ## Commands
 
@@ -292,13 +275,11 @@ cd backend && python lseg_excel_provider.py ../docs/LSEG_news_capture.xlsx
 **Test individual backend modules** (each has a `__main__` block):
 ```bash
 cd backend
-python universe.py                      # Verify CSV sources and static fallback
 python lens_base_filters.py             # Test universal pre-filters
 python lens_regulatory_catalyst.py      # Test regulatory catalyst strategy
 python storage_firestore.py             # Test Firestore connectivity
 python llm_gemini.py                    # Test Gemini API
 python telegram_notifier.py             # Test Telegram channel
-python google_news_connector.py         # Test Google News provider (parked — requires CSE keys)
 python companies_house_connector.py     # Test Companies House API
 ```
 
@@ -321,7 +302,7 @@ Data Ingestion → Deduplication (Firestore) → Routing → Pre-filtering → L
 ### Pluggable Architecture (`backend/abstractions.py`)
 
 All major components follow abstract base classes, making them swappable:
-- `AnnouncementProviderBase` — news sources (Google News RSS, Companies House, RNS stub)
+- `AnnouncementProviderBase` — news sources (Companies House, LSEG Excel)
 - `LLMProviderBase` — LLM backends (currently Gemini 2.0 Flash via `llm_gemini.py`)
 - `NotificationProviderBase` — channels (currently Telegram)
 - `StorageProviderBase` — backends (currently Firestore via `storage_firestore.py`)
@@ -367,5 +348,3 @@ loaded at pipeline startup via `FirestoreUniverseProvider`. Sourced from
 via `import_universe_csv.py`. Each company carries a `companies_house_number` and
 `companies_house_confidence` score populated at import time.
 
-`backend/universe.py` contains a legacy 5-company hardcoded list (REE, ACG, ECOR,
-MCMM, GMR). It is **not used by the pipeline** — retained for reference only.

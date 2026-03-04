@@ -3,12 +3,6 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import List, Optional
 
-try:
-    import pandas as pd
-    DataFrame = pd.DataFrame
-except ImportError:  # pragma: no cover — pandas always present on VM
-    DataFrame = object
-
 
 @dataclass
 class Announcement:
@@ -25,23 +19,6 @@ class Announcement:
     # None = source is not Companies House (field not applicable).
     # 1.0 = exact name match. Lower values indicate fuzzy match.
     companies_house_confidence: Optional[float] = None
-
-
-@dataclass
-class PriceData:
-    ticker: str
-    price: float
-    currency: str
-    as_of: datetime
-
-
-class DataProviderBase(ABC):
-    """Abstract base for all market data providers.
-    Swap implementations without touching the rest of the system."""
-
-    @abstractmethod
-    def get_prices(self, tickers: List[str]) -> List[PriceData]:
-        pass
 
 
 class AnnouncementProviderBase(ABC):
@@ -166,12 +143,10 @@ class UniverseCompany:
     """
     A single company in the monitored universe.
 
-    Populated by the universe pipeline from FTSE Russell PDF constituent
-    lists, enriched with market data from MarketDataProviderBase, and
-    persisted via UniverseStorageProviderBase.
+    Populated by the universe pipeline from FTSE Russell constituent CSVs
+    and persisted via UniverseStorageProviderBase.
 
-    Fields marked Optional may be None when yfinance returns incomplete
-    data — these are flagged DATA_QUALITY by the pipeline.
+    Fields marked Optional may be None when data is unavailable.
     """
     ticker_lse: str                        # Native LSE ticker, e.g. SDY
     ticker_yahoo: str                      # Yahoo Finance format, e.g. SDY.L
@@ -231,51 +206,7 @@ class RefreshLog:
 
 
 # ---------------------------------------------------------------------------
-# Abstraction 6 — Market Data Provider
-# ---------------------------------------------------------------------------
-
-class MarketDataProviderBase(ABC):
-    """
-    Abstract base for all market data providers.
-
-    The PoC implementation is YFinanceProvider (market_data_yfinance.py).
-    Swap to EODHD or any other source by implementing this interface —
-    the pipeline and universe storage layers are unaffected.
-
-    Rate limiting and retry logic are the responsibility of the concrete
-    implementation, not the pipeline that calls it.
-    """
-
-    @abstractmethod
-    def get_info(self, ticker_yahoo: str) -> dict:
-        """
-        Return a dict of market data fields for the given ticker.
-
-        The dict should include (where available):
-          marketCap, totalRevenue, revenueGrowth, sector, industry,
-          averageVolume, currentPrice, fiftyTwoWeekHigh, fiftyTwoWeekLow,
-          trailingPE, trailingEps, isin.
-
-        Returns an empty dict if the ticker is not found or data is
-        unavailable. Never raises — errors are absorbed by the implementation.
-        """
-        pass
-
-    @abstractmethod
-    def get_price_history(self, ticker_yahoo: str, period: str) -> DataFrame:
-        """
-        Return OHLCV price history for the given ticker and period.
-
-        period follows yfinance conventions: '1y', '2y', '5y', 'max', etc.
-
-        Returns an empty DataFrame if data is unavailable.
-        Never raises — errors are absorbed by the implementation.
-        """
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Abstraction 7 — Universe Storage Provider
+# Abstraction 6 — Universe Storage Provider
 # ---------------------------------------------------------------------------
 
 class UniverseStorageProviderBase(ABC):
@@ -291,7 +222,7 @@ class UniverseStorageProviderBase(ABC):
     deduplication and signal/discovery results. The universe is a slowly-
     changing reference dataset and warrants its own abstraction.
 
-    The PoC implementation is FirestoreUniverseProvider
+    The implementation is FirestoreUniverseProvider
     (storage_firestore_universe.py).
 
     All write methods are non-blocking best-effort — a storage failure

@@ -12,8 +12,7 @@ Usage:
     cd backend && python import_universe_csv.py
 
 After a successful run, pipeline.py will load the universe from Firestore
-on subsequent runs. The static universe.py list remains as a last-resort
-fallback for environments without Firestore connectivity.
+on subsequent runs.
 
 CSV sources (most recent version of each pattern is used):
   docs/AIM_data_complete_*.csv        — all AIM-listed stocks
@@ -255,9 +254,8 @@ def _build_universe_companies(rows: List[dict], run_timestamp: datetime) -> list
     Convert raw CSV rows to UniverseCompany dataclass instances.
 
     All optional enrichment fields (sector, industry, price history, ADTV,
-    ISIN) are left as None — this is a lightweight structural import, not a
-    full yfinance enrichment run. Enrichment fields remain out of scope
-    for this importer.
+    ISIN) are left as None — this is a lightweight structural import.
+    Enrichment fields remain out of scope for this importer.
     """
     from abstractions import UniverseCompany
 

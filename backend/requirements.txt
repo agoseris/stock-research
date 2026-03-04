@@ -4,6 +4,5 @@ feedparser
 google-cloud-firestore
 google-genai
 python-telegram-bot
-yfinance
 pandas
 openpyxl

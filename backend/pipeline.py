@@ -3,7 +3,6 @@ from telegram_notifier import TelegramNotifier
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from abstractions import Announcement, StorageProviderBase, UniverseStorageProviderBase
-from google_news_connector import GoogleNewsProvider
 from companies_house_connector import CompaniesHouseProvider
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
@@ -39,11 +38,6 @@ class AnalysisPipeline:
         universe_storage: Optional[UniverseStorageProviderBase] = None,
     ):
         self.providers = [
-            # GoogleNewsProvider(),  # Parked: GCP free trial blocks Custom Search JSON API.
-            #   Code intact in google_news_connector.py. Reactivate by:
-            #   1. Upgrading GCP account from free trial to standard (no immediate charge)
-            #   2. Adding GOOGLE_CSE_KEY and GOOGLE_CSE_ID to backend/.env
-            #   3. Uncommenting this line
             CompaniesHouseProvider(universe_storage=universe_storage),
         ]
         self.lenses = [
@@ -54,10 +48,7 @@ class AnalysisPipeline:
         self.storage = storage or FirestoreProvider()
         self.universe_storage = universe_storage
 
-        # Load the active universe at startup.
-        # Primary source: Firestore via UniverseStorageProviderBase.
-        # Fallback: static universe.py list (used during transition, or if
-        # the dynamic universe has not yet been populated).
+        # Load the active universe at startup from Firestore.
         self._universe: List[dict] = self._load_universe(universe_storage)
 
     def _load_universe(

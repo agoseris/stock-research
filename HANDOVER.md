@@ -216,8 +216,6 @@ and `market_cap_gbp` before calling `save_signal_result` and `_notify_signal`.
 | Job runner | Live | Running as systemd service `job_runner` on VM |
 | LLM analysis | Live | Gemini 2.0 Flash, regulatory catalyst lens |
 | Notifications | Live | Telegram |
-| Google News / CSE | Parked | Structurally late relative to RNS. See `docs/archive/SOBER_ASSESSMENT_v1.md`. |
-| NewsAPI | Parked | |
 
 ---
 
