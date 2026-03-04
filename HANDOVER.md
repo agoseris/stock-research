@@ -1,5 +1,5 @@
 # Session Handover
-**Last updated:** 3 March 2026 (session 2)
+**Last updated:** 4 March 2026 (session 3)
 **App version:** 2.44
 **Branch:** `master`
 
@@ -18,6 +18,96 @@ App running locally on WSL2 at `http://localhost:8501`.
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
 **Next steps:** Phase 3 — Lens 1 validation (director/PDMR buying). See `ROADMAP.md`.
+Next tool to build: **tool 4 — `get_index_snapshot` + daily LSEG scraper** (spec: `docs/design/layer1_tools.md`).
+
+---
+
+## Session 3 — Director Lens Utilities + Dead Code Cleanup (4 March 2026)
+
+### Dead code removed
+
+Six abstractions now (was seven). The following were removed because they had no active users:
+
+| Removed | Reason |
+|---|---|
+| `backend/google_news_connector.py` | Parked — all free RSS sources return 503/429 from GCP IPs |
+| `backend/newsapi_connector.py` | Zero imports anywhere in codebase |
+| `backend/market_data_yfinance.py` | Never imported by pipeline or job_runner |
+| `backend/universe.py` | Legacy 5-company hardcoded list — pipeline reads from Firestore |
+| `backend/tests/archive/` | 4 archived yfinance tests + README; all depended on removed provider |
+| `PriceData` dataclass | Early draft, never used |
+| `DataProviderBase` abstract class | Never implemented |
+| `MarketDataProviderBase` abstract class | Only implementation (yfinance) deleted |
+| `yfinance` in `backend/requirements.txt` | Only used by deleted module |
+
+`backend/pipeline.py` import of `GoogleNewsProvider` and its commented-out instantiation block also removed.
+
+CLAUDE.md and HANDOVER.md updated throughout: "Seven Abstractions" → "Six Abstractions".
+
+---
+
+### New `utilities/` directory
+
+Top-level `utilities/` directory created for director lens tools. Runs under `scripts/venv` (Python 3.12). Includes `utilities/tests/` for all unit and integration tests.
+
+**Credential loading pattern** (used by all utilities):
+```python
+_UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
+load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+```
+Using `find_dotenv()` is incorrect — it only walks upward from CWD and never descends into `backend/`, causing credential failures on the VM when CWD is the project root.
+
+---
+
+### Tool 1 — `director_name_normalisation` ✅
+
+**File:** `utilities/director_name_normalisation.py`
+**Tests:** `utilities/tests/test_director_name_normalisation.py` — 46/46 passing
+
+Handles inconsistent name formats from RNS/PDMR filings:
+- `normalise_director_name(raw_name)` — 10-step pipeline: surname-first detection, all-caps, title-case, strip honorifics, strip middle initials, strip punctuation, normalise whitespace, lowercase, detect abbreviated
+- `names_match(name_a, name_b, threshold=0.85)` — exact → abbreviated → fuzzy → hyphen-vs-space retry → no_match with nickname ambiguity detection
+- `normalise_for_storage(raw_name)` — convenience wrapper; logs warning if confidence ≠ "high"
+
+**Key design decisions:**
+- `rapidfuzz.fuzz.token_sort_ratio` for fuzzy matching — scores divided by 100 for 0.0–1.0 range
+- `_NICKNAME_LOOKUP` dict required to distinguish James/Jim (flag as "low" confidence no-match) from John/Jane ("high" confidence no-match) — score alone (75 vs 80) cannot separate these
+- Hyphen-vs-space retry: "Sarah Jones-Williams" vs "Sarah Jones Williams" scores only 65 with raw token_sort_ratio; retry with hyphens→spaces achieves 100
+
+---
+
+### Tool 2 — `get_company_profile` ✅
+
+**File:** `utilities/get_company_profile.py`
+**Tests:** `utilities/tests/test_get_company_profile.py` — 33/33 passing (28 unit + 5 integration)
+
+Reads from `universe_companies` Firestore collection. Key fields and conventions:
+- `listing_exchange` stored as `"AIM"` or `"LSE_MAIN"` in Firestore → mapped to `"AIM"` / `"MAIN_MARKET"` at tool layer
+- `market_cap_date` derived from `last_refreshed` field (ISO string, set only by `save_universe()`/`save_company()`, not by signal state writes)
+- `market_cap_stale = age > 90 days`; `None` when no date and no cap; `True` when cap present but no date (conservative)
+- Integration tests skip automatically when `GOOGLE_APPLICATION_CREDENTIALS` not set
+
+Integration test tickers: QHE, STAR, AVG (all confirmed live in Firestore March 2026).
+
+---
+
+### Tool 3 — `get_company_ch_filings` ✅
+
+**File:** `utilities/get_company_ch_filings.py`
+**Tests:** `utilities/tests/test_get_company_ch_filings.py` — 83/83 passing (77 unit + 6 integration)
+
+Reads from `announcements` collection WHERE `ticker == X AND source_name == "Companies House"`. Date filtering done in Python (not Firestore) to avoid needing a composite index.
+
+**Director change extraction:**
+- CH internal format: `"Director Appointed: appoint-person#name=SMITH+JOHN&..."` → extracts name via `#name=([A-Za-z%+\-]+)` regex, reformats `SURNAME FORENAMES` → `"SURNAME, FORENAMES"` before passing to `normalise_for_storage()` (normaliser re-orders to "forenames surname")
+- Natural language format: `"Appointment of John Smith as a director"` / `"Termination of appointment of Jane Doe as a director"` → direct regex extraction
+
+**`board_stability`:** `"active_change"` if any director appointment or resignation within last 90 days; `"stable"` otherwise. Added to output even though not in spec's return block — it IS in the acceptance criteria.
+
+**`published_at` parsing:** `save_announcement()` stores `str(datetime_obj)` = `"2024-01-15 00:00:00+00:00"` (space-separated, not ISO). `_parse_published_at()` handles: space format, ISO with T, date-only string, datetime object (Firestore Timestamp), naive datetime.
+
+**Integration test tickers:** REE, VCT, IDOX. QHE/STAR/AVG have no CH filings in Firestore within the last 365 days (these companies are either offshore-incorporated or their filings predate the CH pipeline's deployment).
 
 ---
 

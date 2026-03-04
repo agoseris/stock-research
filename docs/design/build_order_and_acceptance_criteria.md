@@ -452,9 +452,9 @@ At the end of each session, before closing:
 Mark each tool as complete when signed off:
 
 ```
- 1. director_name_normalisation    [ ]
- 2. get_company_profile            [ ]
- 3. get_company_ch_filings         [ ]
+ 1. director_name_normalisation    [✅] signed off 4 Mar 2026 — 46/46 tests
+ 2. get_company_profile            [✅] signed off 4 Mar 2026 — 33/33 tests (28 unit + 5 integration)
+ 3. get_company_ch_filings         [✅] signed off 4 Mar 2026 — 83/83 tests (77 unit + 6 integration)
  4. get_index_snapshot + scraper   [ ]
  5. get_price_history              [ ]
  6. get_volatility_metrics         [ ]
