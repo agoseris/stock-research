@@ -17,6 +17,8 @@ gcp-credentials.json
 logs/
 streamlit.pid
 frontend/lseg_cookies.json
+scripts/auto_ingest.log
+scripts/venv/
 
 # Data (optional - remove if you want these in git)
 # *.xlsx
