@@ -31,17 +31,39 @@ article_type:       string  ← "pdmr_transaction" |
                                "substantive_news" | 
                                "administrative" |
                                "unclassified"
-extraction_status:  string  ← "pending" | "complete" | "failed"
+extraction_status:  string  ← see Extraction Status enum below
 summary:            string  ← 2-3 sentence narrative (all types)
 expires_at:         timestamp  ← TTL field
 ```
 
+**Extraction Status enum:**
+```
+"pending"     ← ingested, awaiting extraction (new pipeline)
+"complete"    ← fully processed by new pipeline at ingestion time
+"failed"      ← extraction attempted but failed — log and retry
+"backfilled"  ← historical document processed retrospectively
+"legacy"      ← historical document, not processed, new fields absent
+```
+
+**Handling legacy documents (documents created before new pipeline):**
+All new code must handle missing fields gracefully using `.get()` 
+with sensible defaults:
+```python
+article_type = doc.get("article_type", "unclassified")
+extraction_status = doc.get("extraction_status", "legacy")
+summary = doc.get("summary", None)
+expires_at = doc.get("expires_at", None)
+```
+Legacy documents are not backfilled unless they correspond to 
+Acted or Deferred signals (see migration_notes.md).
+
 **TTL policy by article type:**
 ```
 pdmr_transaction:     no expiry on base record
-regulatory_catalyst:  3 months
+regulatory_catalyst:  3 months (24 months if backfilled Acted/Deferred)
 substantive_news:     3 months
 administrative:       2 weeks
+legacy:               no expiry set — age out naturally or ignore
 ```
 
 ---
