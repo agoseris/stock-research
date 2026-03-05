@@ -18,8 +18,8 @@ App running locally on WSL2 at `http://localhost:8501`.
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
 **Next steps:** Phase 3 — Lens 1 validation (director/PDMR buying). See `ROADMAP.md`.
-Next tool to build: **tool 11 — `get_company_news_history`** (spec: `docs/design/layer3_tools.md`).
-Tools 1–10 complete and signed off. Tool 11 requires seeding synthetic `company_news_summaries` Firestore docs for testing.
+Next tool to build: **tool 12 — `get_director_companies_house_profile`** (spec: `docs/design/layer2_tools.md`).
+Tools 1–11 complete. Tool 12 uses Companies House /search/officers API.
 
 ---
 
@@ -36,6 +36,7 @@ Tools 1–10 complete and signed off. Tool 11 requires seeding synthetic `compan
 | 8. `get_director_transaction_history` | `utilities/get_director_transaction_history.py` | 65/65 |
 | 9. `get_company_insider_activity` | `utilities/get_company_insider_activity.py` | 61/61 |
 | 10. `get_price_movement_context` | `utilities/get_price_movement_context.py` | 103/103 |
+| 11. `get_company_news_history` | `utilities/get_company_news_history.py` | 82/82 |
 
 ### Tool 10 — `get_price_movement_context` design notes
 
