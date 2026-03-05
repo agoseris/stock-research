@@ -455,10 +455,10 @@ Mark each tool as complete when signed off:
  1. director_name_normalisation    [✅] signed off 4 Mar 2026 — 46/46 tests
  2. get_company_profile            [✅] signed off 4 Mar 2026 — 33/33 tests (28 unit + 5 integration)
  3. get_company_ch_filings         [✅] signed off 4 Mar 2026 — 83/83 tests (77 unit + 6 integration)
- 4. get_index_snapshot + scraper   [ ]
- 5. get_price_history              [ ]
- 6. get_volatility_metrics         [ ]
- 7. get_relative_performance       [ ]
+ 4. get_index_snapshot + scraper   [✅] signed off 5 Mar 2026 — 48/48 tests (42 unit + 6 integration)
+ 5. get_price_history              [✅] signed off 5 Mar 2026 — 39/39 tests (32 unit + 7 integration)
+ 6. get_volatility_metrics         [✅] signed off 5 Mar 2026 — 55/55 tests (47 unit + 8 integration)
+ 7. get_relative_performance       [✅] signed off 5 Mar 2026 — 67/67 tests (61 unit + 6 integration)
  8. get_director_transaction_history [ ]
  9. get_company_insider_activity   [ ]
 10. get_price_movement_context     [ ]
