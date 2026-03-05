@@ -459,7 +459,7 @@ Mark each tool as complete when signed off:
  5. get_price_history              [✅] signed off 5 Mar 2026 — 39/39 tests (32 unit + 7 integration)
  6. get_volatility_metrics         [✅] signed off 5 Mar 2026 — 55/55 tests (47 unit + 8 integration)
  7. get_relative_performance       [✅] signed off 5 Mar 2026 — 67/67 tests (61 unit + 6 integration)
- 8. get_director_transaction_history [ ]
+ 8. get_director_transaction_history [✅] signed off 5 Mar 2026 — 65/65 tests (56 unit + 9 integration)
  9. get_company_insider_activity   [ ]
 10. get_price_movement_context     [ ]
 11. get_company_news_history       [ ]
