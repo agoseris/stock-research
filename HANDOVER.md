@@ -18,8 +18,8 @@ App running locally on WSL2 at `http://localhost:8501`.
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
 **Next steps:** Phase 3 — Lens 1 validation (director/PDMR buying). See `ROADMAP.md`.
-Next tool to build: **tool 12 — `get_director_companies_house_profile`** (spec: `docs/design/layer2_tools.md`).
-Tools 1–11 complete. Tool 12 uses Companies House /search/officers API.
+Next tool to build: **tool 13 — `get_index_context_for_freshness`** (spec: `docs/design/layer3_tools.md` + `layer1_tools.md`).
+Tools 1–12 complete. Tool 13 is a thin wrapper around `get_index_snapshot` with added historical trend fields.
 
 ---
 
@@ -37,6 +37,7 @@ Tools 1–11 complete. Tool 12 uses Companies House /search/officers API.
 | 9. `get_company_insider_activity` | `utilities/get_company_insider_activity.py` | 61/61 |
 | 10. `get_price_movement_context` | `utilities/get_price_movement_context.py` | 103/103 |
 | 11. `get_company_news_history` | `utilities/get_company_news_history.py` | 82/82 |
+| 12. `get_director_companies_house_profile` | `utilities/get_director_companies_house_profile.py` | 52/52 |
 
 ### Tool 10 — `get_price_movement_context` design notes
 
