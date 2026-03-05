@@ -1,5 +1,5 @@
 # Session Handover
-**Last updated:** 4 March 2026 (session 3)
+**Last updated:** 5 March 2026 (session 5)
 **App version:** 2.44
 **Branch:** `master`
 
@@ -18,7 +18,37 @@ App running locally on WSL2 at `http://localhost:8501`.
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
 **Next steps:** Phase 3 — Lens 1 validation (director/PDMR buying). See `ROADMAP.md`.
-Next tool to build: **tool 4 — `get_index_snapshot` + daily LSEG scraper** (spec: `docs/design/layer1_tools.md`).
+Next tool to build: **tool 11 — `get_company_news_history`** (spec: `docs/design/layer3_tools.md`).
+Tools 1–10 complete and signed off. Tool 11 requires seeding synthetic `company_news_summaries` Firestore docs for testing.
+
+---
+
+## Session 5 — Director Lens Tools 4–10 (5 March 2026)
+
+### Tools built and signed off
+
+| Tool | File | Tests |
+|---|---|---|
+| 4. `get_index_snapshot` + scraper | `utilities/get_index_snapshot.py`, `scripts/scrape_index_snapshots.py` | 48/48 |
+| 5. `get_price_history` | `utilities/get_price_history.py` | 39/39 |
+| 6. `get_volatility_metrics` | `utilities/get_volatility_metrics.py` | 55/55 |
+| 7. `get_relative_performance` | `utilities/get_relative_performance.py` | 67/67 |
+| 8. `get_director_transaction_history` | `utilities/get_director_transaction_history.py` | 65/65 |
+| 9. `get_company_insider_activity` | `utilities/get_company_insider_activity.py` | 61/61 |
+| 10. `get_price_movement_context` | `utilities/get_price_movement_context.py` | 103/103 |
+
+### Tool 10 — `get_price_movement_context` design notes
+
+Layer 3 Signal Freshness tool. Key design decisions:
+
+- **Inputs:** `ticker`, `transaction_date`, `published_at`, `reporting_lag_days`, optional `price_data_cache={"hist": pd.DataFrame}`
+- **Cache:** when `price_data_cache` is provided, no yfinance call is made and no rate-limit sleep fires — orchestrator pre-fetches once and shares with Layer 1
+- **Date adjustment:** weekends/holidays → nearest prior trading day; `date_adjustment_applied=True` and `date_adjustment_note` describe which dates were adjusted
+- **`movement_during_lag`:** `change_pct=None` when `lag==0`; short lags (≤5d) flagged as potential noise; lags >5d get descriptive note about partial pricing-in
+- **Short window analysis:** 3d/1w/2w/1m of trading days strictly before `published_at`; each window has `change_pct`, `avg_daily_volume`, `volume_vs_30d_avg` (ratio vs full 1y history baseline), `volume_anomaly`
+- **Volume anomaly note:** observation-only language, explicitly no leakage assertion
+- **`price_currency = "GBp"`** — accurate (yfinance returns pence for LSE stocks)
+- **Baseline volume:** mean of all non-zero volumes across the full 1y history
 
 ---
 
