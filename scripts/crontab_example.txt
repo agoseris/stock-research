@@ -1,0 +1,23 @@
+# LSEG auto-ingest — hourly 07:30–19:30 Mon–Fri (UK market hours)
+# Runs on the local machine (WSL2, residential IP) to avoid GCP IP blocking.
+#
+# Install:
+#   crontab -e
+#   Paste the line below (adjust path if your username differs).
+#
+# WSL2 cron setup (one-time per WSL session):
+#   sudo service cron start
+#
+# Auto-start cron on WSL boot — add to /etc/wsl.conf:
+#   [boot]
+#   command = service cron start
+#
+# Check logs:
+#   tail -f /home/agoseris/projects/stock-research/scripts/auto_ingest.log
+
+30 7-19 * * 1-5  cd /home/agoseris/projects/stock-research && scripts/venv/bin/python3 scripts/auto_ingest.py >> scripts/auto_ingest.log 2>&1
+
+# Index snapshot — once daily at 17:00 UTC (after UK market close, Mon–Fri)
+# Writes AIM_ALL_SHARE, FTSE_SMALL_CAP, FTSE_250 snapshots to Firestore.
+# Check logs:   tail -f /home/agoseris/projects/stock-research/scripts/index_snapshot.log
+0 17 * * 1-5  cd /home/agoseris/projects/stock-research && scripts/venv/bin/python3 scripts/scrape_index_snapshots.py >> scripts/index_snapshot.log 2>&1

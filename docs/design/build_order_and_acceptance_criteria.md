@@ -464,5 +464,5 @@ Mark each tool as complete when signed off:
 10. get_price_movement_context     [✅] signed off 5 Mar 2026 — 103/103 tests (95 unit + 8 integration)
 11. get_company_news_history       [✅] signed off 5 Mar 2026 — 82/82 tests (70 unit + 12 integration)
 12. get_director_companies_house_profile [✅] signed off 5 Mar 2026 — 52/52 tests (44 unit + 8 integration)
-13. get_index_context_for_freshness [ ]
+13. get_index_context_for_freshness [✅] signed off 5 Mar 2026 — 38/38 tests (30 unit + 8 integration)
 ```

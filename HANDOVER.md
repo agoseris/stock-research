@@ -17,9 +17,8 @@ App running locally on WSL2 at `http://localhost:8501`.
 | Ingest | Working | **Phase 1 complete (v2.31).** "Fetch from LSEG" button live. Three-index fetch: MCX (FTSE 250) + SMX (FTSE Small Cap) + AXX (FTSE AIM All-Share), each under 500 rows/day, merged + deduplicated on source_url. Excel upload retained as fallback. |
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
-**Next steps:** Phase 3 — Lens 1 validation (director/PDMR buying). See `ROADMAP.md`.
-Next tool to build: **tool 13 — `get_index_context_for_freshness`** (spec: `docs/design/layer3_tools.md` + `layer1_tools.md`).
-Tools 1–12 complete. Tool 13 is a thin wrapper around `get_index_snapshot` with added historical trend fields.
+**Next steps:** All 13 director lens tools complete. Phase 3 — build the Director Lens Orchestrator.
+See `docs/design/director_lens_overview.md` for the synthesis layer specification.
 
 ---
 
@@ -38,6 +37,7 @@ Tools 1–12 complete. Tool 13 is a thin wrapper around `get_index_snapshot` wit
 | 10. `get_price_movement_context` | `utilities/get_price_movement_context.py` | 103/103 |
 | 11. `get_company_news_history` | `utilities/get_company_news_history.py` | 82/82 |
 | 12. `get_director_companies_house_profile` | `utilities/get_director_companies_house_profile.py` | 52/52 |
+| 13. `get_index_context_for_freshness` | `utilities/get_index_context_for_freshness.py` | 38/38 |
 
 ### Tool 10 — `get_price_movement_context` design notes
 

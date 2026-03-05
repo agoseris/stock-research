@@ -1,0 +1,6 @@
+google-cloud-firestore
+openpyxl
+python-dotenv
+playwright
+yfinance
+pandas
