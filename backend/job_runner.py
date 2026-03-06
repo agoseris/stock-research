@@ -29,9 +29,9 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 from abstractions import Announcement, UniverseCompany
 from google.cloud import firestore

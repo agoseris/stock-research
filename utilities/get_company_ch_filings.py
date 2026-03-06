@@ -23,10 +23,10 @@ from urllib.parse import unquote_plus
 
 from dotenv import load_dotenv
 
-# Load credentials from backend/.env, resolved relative to this file
+# Load credentials from .env at the project root.
 _UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
-load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
 sys_path_parent = _PROJECT_ROOT
 import sys

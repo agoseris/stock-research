@@ -26,9 +26,9 @@ from dotenv import load_dotenv
 
 _UTILITIES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PROJECT_ROOT = _UTILITIES_DIR
-load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
-# Credentials fallback: backend/.env path → frontend/gcp-credentials.json
+# Credentials fallback: .env path → frontend/gcp-credentials.json
 _creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
 if not _creds_path or not os.path.exists(_creds_path):
     _frontend_creds = os.path.join(_PROJECT_ROOT, "frontend", "gcp-credentials.json")

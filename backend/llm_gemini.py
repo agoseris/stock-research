@@ -1,9 +1,9 @@
 from google import genai
 from abstractions import LLMProviderBase
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 import os
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 class GeminiProvider(LLMProviderBase):
     """LLM Provider implementation using Google Gemini API.

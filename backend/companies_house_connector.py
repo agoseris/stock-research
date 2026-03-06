@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 import requests
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 from abstractions import (
     Announcement,
@@ -12,7 +12,7 @@ from abstractions import (
     UniverseStorageProviderBase,
 )
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 
 class CompaniesHouseProvider(AnnouncementProviderBase):

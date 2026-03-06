@@ -43,7 +43,7 @@ from dotenv import load_dotenv
 
 _UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
-load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
 # Fallback credentials path for local dev where VM path in .env doesn't exist
 _creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")

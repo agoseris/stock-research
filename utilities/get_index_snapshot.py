@@ -23,10 +23,10 @@ from datetime import date, datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
-# Load credentials from backend/.env, resolved relative to this file
+# Load credentials from .env at the project root.
 _UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
-load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
 # The .env carries the VM credentials path. On the local machine, fall back to
 # frontend/gcp-credentials.json if the env-var is unset or the path doesn't exist.

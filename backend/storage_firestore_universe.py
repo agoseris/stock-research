@@ -22,12 +22,12 @@ import os
 from datetime import date, datetime, timezone
 from typing import List, Optional
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from google.cloud import firestore
 
 from abstractions import RefreshLog, UniverseCompany, UniverseStorageProviderBase
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 _DEFAULT_SIGNAL_CONFIG = {
     "monitor_decay_days": 30,

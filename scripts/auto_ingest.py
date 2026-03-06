@@ -41,7 +41,7 @@ sys.path.insert(0, str(_REPO_ROOT / "frontend"))
 
 from dotenv import load_dotenv  # noqa: E402
 
-load_dotenv(_REPO_ROOT / "backend" / ".env")
+load_dotenv(_REPO_ROOT / ".env")
 
 # The .env carries the VM credentials path. On the local machine the file lives
 # in frontend/. If the env-var path doesn't exist, try that local fallback.

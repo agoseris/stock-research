@@ -34,9 +34,8 @@ from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 
-# Load .env from the same directory as this script (backend/.env),
-# regardless of the working directory the script is invoked from.
-load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+# Load .env from the project root, regardless of working directory.
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env"))
 
 # Path to docs/ relative to this file
 _DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs")

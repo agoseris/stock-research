@@ -17,12 +17,12 @@ import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from google.cloud import firestore
 
 from abstractions import Announcement, StorageProviderBase
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 
 class FirestoreProvider(StorageProviderBase):

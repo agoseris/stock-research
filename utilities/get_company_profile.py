@@ -19,11 +19,11 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-# Load credentials from backend/.env relative to the project root.
+# Load credentials from .env at the project root.
 # Computed from this file's location so it works regardless of CWD.
 _UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
-load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
 _STALE_THRESHOLD_DAYS = 90
 

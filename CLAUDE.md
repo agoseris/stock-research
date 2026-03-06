@@ -283,7 +283,7 @@ python telegram_notifier.py             # Test Telegram channel
 python companies_house_connector.py     # Test Companies House API
 ```
 
-**Environment:** Backend requires a `.env` file at `backend/.env` with keys for: Gemini, Companies House, Telegram, and a Google Cloud credentials JSON path for Firestore.
+**Environment:** Requires a `.env` file at the **project root** (`.env`) with keys for: Gemini, Companies House, Telegram, Anthropic, and a Google Cloud credentials JSON path for Firestore.
 
 ## Architecture
 

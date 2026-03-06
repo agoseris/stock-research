@@ -42,7 +42,7 @@ from utilities.director_name_normalisation import normalise_for_storage, names_m
 
 _UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
-load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
 # ---------------------------------------------------------------------------
 # Constants

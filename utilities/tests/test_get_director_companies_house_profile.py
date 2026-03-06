@@ -565,7 +565,7 @@ def _has_ch_key():
 class TestGetDirectorCHProfileIntegration:
     """
     Live integration tests using the real CH API.
-    Require COMPANIES_HOUSE_KEY in backend/.env.
+    Require COMPANIES_HOUSE_KEY in .env at project root.
 
     NOTE: The specific known-director test uses a real UK director from a publicly
     listed company. Replace with a director from your actual Acted/Deferred signals

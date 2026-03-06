@@ -11,9 +11,9 @@ Run with:
 
 import streamlit as st
 from datetime import datetime, timedelta, timezone
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 VERSION = "2.47"
 

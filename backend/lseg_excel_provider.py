@@ -452,9 +452,9 @@ class LSEGExcelProvider(AnnouncementProviderBase):
 
 if __name__ == "__main__":
     import sys
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv, find_dotenv
 
-    load_dotenv()
+    load_dotenv(find_dotenv())
 
     file_path = sys.argv[1] if len(sys.argv) > 1 else "../docs/LSEG_news_capture.xlsx"
 

@@ -23,10 +23,10 @@ from datetime import date, timedelta
 
 from dotenv import load_dotenv
 
-# Load credentials from backend/.env, resolved relative to this file
+# Load credentials from .env at the project root.
 _UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
-load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
 # Credentials fallback for local dev (VM path in .env may not exist locally)
 _creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")

@@ -38,7 +38,7 @@ sys.path.insert(0, str(_REPO_ROOT / "frontend"))
 
 from dotenv import load_dotenv  # noqa: E402
 
-load_dotenv(_REPO_ROOT / "backend" / ".env")
+load_dotenv(_REPO_ROOT / ".env")
 
 # Handle the credentials path: the .env carries the VM path; on local machine
 # fall back to frontend/gcp-credentials.json if the env-var is unset or the

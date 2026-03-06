@@ -1,10 +1,10 @@
 import asyncio
 from telegram import Bot
 from abstractions import NotificationProviderBase
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 import os
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 class TelegramNotifier(NotificationProviderBase):
     """Notification channel implementation using Telegram.

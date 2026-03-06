@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 # Load credentials (needed transitively if Firestore is called from the same session)
 _UTILITIES_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_UTILITIES_DIR)
-load_dotenv(os.path.join(_PROJECT_ROOT, "backend", ".env"))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 
 # ---------------------------------------------------------------------------
 # Constants
