@@ -7,6 +7,7 @@ from firestore_helpers import (
     get_signal_history_for_ticker,
     set_position_state,
     delete_signal_result,
+    delete_director_signal,
 )
 from ui_helpers import (
     parse_analysis,
@@ -21,7 +22,364 @@ from ui_helpers import (
 )
 
 
-def render_signals_tab(db, signals, company_map) -> None:
+# ---------------------------------------------------------------------------
+# Director lens signal helpers
+# ---------------------------------------------------------------------------
+
+def _director_rec_class(rec: str) -> str:
+    """Map agentic_recommendation to CSS card class suffix."""
+    r = (rec or "").lower()
+    if "investigate" in r:
+        return "director-investigate"
+    if "monitor" in r:
+        return "director-monitor"
+    if "ignore" in r:
+        return "director-ignore"
+    return "director-pending"
+
+
+def _director_rec_badge(rec: str, agentic_status: str) -> str:
+    """Return HTML badge for director recommendation or agentic status."""
+    if agentic_status == "complete" and rec:
+        r = rec.lower()
+        if "investigate" in r:
+            css = "badge badge-director-investigate"
+            label = "Investigate Further"
+        elif "monitor" in r:
+            css = "badge badge-director-monitor"
+            label = "Monitor"
+        elif "ignore" in r:
+            css = "badge badge-director-ignore"
+            label = "Ignore"
+        else:
+            css = "badge badge-director-pending"
+            label = rec
+    elif agentic_status == "running":
+        css = "badge badge-director-pending"
+        label = "Agentic running…"
+    elif agentic_status == "failed":
+        css = "badge badge-director-ignore"
+        label = "Agentic failed"
+    else:
+        css = "badge badge-director-pending"
+        label = "Agentic pending"
+    return f'<span class="{css}">{label}</span>'
+
+
+def _simple_rec_badge(simple_rec: str) -> str:
+    """Return HTML badge for simple lens recommended action."""
+    r = (simple_rec or "").lower()
+    if "investigate" in r or r == "yes":
+        css, label = "badge badge-yes", "Simple: Investigate"
+    elif "monitor" in r:
+        css, label = "badge badge-monitor", "Simple: Monitor"
+    else:
+        css, label = "badge badge-no", "Simple: Pass"
+    return f'<span class="{css}">{label}</span>'
+
+
+def _render_director_signal_card(doc_id: str, signal: dict, company: dict, db) -> None:
+    """Render a single director lens signal card."""
+    ticker      = signal.get("ticker") or "—"
+    co_name     = signal.get("company_name") or ""
+    signal_type = signal.get("signal_type") or "director_buying"
+    published   = signal.get("published_at") or ""
+    if hasattr(published, "strftime"):
+        published = published.strftime("%Y-%m-%d")
+
+    agentic_status = signal.get("agentic_status") or "pending"
+    agentic_rec    = signal.get("agentic_recommendation") or ""
+    simple_rec     = signal.get("simple_recommended_action") or ""
+
+    sig_state = company.get("signal_state") or "watching"
+    pos_state = (company.get("position_state") or "").strip()
+    sig_age   = format_signal_age(company.get("signal_state_since"))
+
+    card_class  = f"signal-card-compact {_director_rec_class(agentic_rec)}"
+    state_badge = signal_state_badge(sig_state, sig_age)
+    pos_badge   = position_state_badge(pos_state)
+    type_label  = "Director Buying" if signal_type == "director_buying" else "Director Disposal"
+
+    mkt     = company.get("market_cap_gbp")
+    mkt_str = format_market_cap(mkt)
+    mkt_label = f"Market Cap {mkt_str}" if mkt_str != "—" else "—"
+
+    # Director name from synthesis briefing if available
+    synthesis = signal.get("agentic_synthesis_full") or {}
+    briefing  = synthesis.get("briefing") or {}
+    director  = briefing.get("director") or ""
+
+    agentic_badge = _director_rec_badge(agentic_rec, agentic_status)
+    simple_badge  = _simple_rec_badge(simple_rec)
+    type_badge    = f'<span class="badge badge-director-type">{type_label}</span>'
+
+    director_html = f'<span style="color:#8aabcc;font-size:0.78rem"> · {director}</span>' if director else ""
+
+    card_html = (
+        f'<div class="{card_class}">'
+        f'<div class="card-row-top">'
+        f'<span><span class="card-ticker">{ticker}</span>'
+        f'<span class="card-company">{co_name}</span>{director_html}</span>'
+        f'<span class="card-market">{mkt_label}</span>'
+        f'</div>'
+        f'<div class="card-meta">{published}</div>'
+        f'<div class="card-badges">{type_badge}{simple_badge}{agentic_badge}{state_badge}{pos_badge}</div>'
+        f'</div>'
+    )
+    st.markdown(card_html, unsafe_allow_html=True)
+
+    # ── Detail columns ───────────────────────────────────────────────────────
+    col_simple, col_agentic, col_act, col_defer, col_decline, col_close, col_dismiss = st.columns(
+        [2.5, 2.5, 1, 1, 1, 1, 1]
+    )
+
+    with col_simple:
+        with st.expander("Simple Lens"):
+            summary = signal.get("simple_summary") or ""
+            strength = signal.get("simple_signal_strength")
+            direction = signal.get("simple_signal_direction") or ""
+            limitations = signal.get("simple_limitations") or ""
+            if summary:
+                st.markdown(f'<div style="font-size:0.82rem;color:#a0c0d8;line-height:1.55;">{summary}</div>', unsafe_allow_html=True)
+            if strength is not None or direction:
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:#6a8ca8;margin-top:0.4rem;">'
+                    f'Strength: {strength} &nbsp;·&nbsp; Direction: {direction}</div>',
+                    unsafe_allow_html=True,
+                )
+            if limitations:
+                st.markdown(
+                    f'<div style="font-size:0.75rem;color:#4a6080;margin-top:0.5rem;border-top:1px solid #1a2535;padding-top:0.4rem;">'
+                    f'<strong style="color:#6a8ca8;">Limitations:</strong><br>{limitations}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    with col_agentic:
+        if agentic_status == "complete" and synthesis:
+            with st.expander("Agentic Briefing"):
+                layer_sums = synthesis.get("layer_summaries") or {}
+                cross = synthesis.get("cross_layer_assessment") or {}
+                dq = synthesis.get("data_quality_summary") or {}
+                vs_simple = synthesis.get("vs_simple_lens") or {}
+                token_usage = signal.get("agentic_token_usage") or {}
+
+                # Recommendation justification
+                justification = synthesis.get("recommendation_justification") or ""
+                if justification:
+                    st.markdown(
+                        f'<div style="font-size:0.82rem;color:#c09af7;line-height:1.55;margin-bottom:0.6rem;">'
+                        f'<strong>Recommendation:</strong> {agentic_rec}<br><br>{justification}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # Facts and Inference
+                fact_sum = synthesis.get("fact_summary") or ""
+                inf_sum  = synthesis.get("inference_summary") or ""
+                if fact_sum:
+                    st.markdown(
+                        f'<div style="font-size:0.78rem;color:#8aabcc;line-height:1.5;margin-top:0.5rem;">'
+                        f'<strong style="color:#a0c0d8;">Facts:</strong><br>{fact_sum}</div>',
+                        unsafe_allow_html=True,
+                    )
+                if inf_sum:
+                    st.markdown(
+                        f'<div style="font-size:0.78rem;color:#8aabcc;line-height:1.5;margin-top:0.5rem;">'
+                        f'<strong style="color:#f7e14a;">Inference:</strong><br>{inf_sum}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # Thin data flags (never hidden)
+                thin_flags = dq.get("thin_data_flags") or []
+                if thin_flags:
+                    flags_html = "".join(f"<li>{f}</li>" for f in thin_flags)
+                    st.markdown(
+                        f'<div style="font-size:0.75rem;color:#f7a84a;margin-top:0.5rem;">'
+                        f'<strong>Thin data:</strong><ul style="margin:0.2rem 0 0 1rem;padding:0;">{flags_html}</ul></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # Cross-layer coherence
+                coherence = cross.get("coherence") or ""
+                if coherence:
+                    tensions   = cross.get("tensions") or ""
+                    amplifiers = cross.get("amplifiers") or ""
+                    st.markdown(
+                        f'<div style="font-size:0.75rem;color:#6a8ca8;margin-top:0.5rem;border-top:1px solid #1a2535;padding-top:0.4rem;">'
+                        f'<strong style="color:#8aabcc;">Coherence:</strong> {coherence}'
+                        + (f'<br><strong>Amplifiers:</strong> {amplifiers}' if amplifiers else "")
+                        + (f'<br><strong>Tensions:</strong> {tensions}' if tensions else "")
+                        + f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # vs simple lens
+                agentic_adds    = vs_simple.get("agentic_adds") or ""
+                agentic_changes = vs_simple.get("agentic_changes") or ""
+                if agentic_adds or agentic_changes:
+                    st.markdown(
+                        f'<div style="font-size:0.75rem;color:#6a8ca8;margin-top:0.5rem;border-top:1px solid #1a2535;padding-top:0.4rem;">'
+                        f'<strong style="color:#8aabcc;">vs Simple Lens:</strong>'
+                        + (f'<br><strong>Adds:</strong> {agentic_adds}' if agentic_adds else "")
+                        + (f'<br><strong>Changes:</strong> {agentic_changes}' if agentic_changes else "")
+                        + f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # Limitations (always in full)
+                limitations = signal.get("agentic_limitations") or synthesis.get("limitations") or ""
+                if limitations:
+                    st.markdown(
+                        f'<div style="font-size:0.75rem;color:#4a6080;margin-top:0.5rem;border-top:1px solid #1a2535;padding-top:0.4rem;">'
+                        f'<strong style="color:#6a8ca8;">Limitations:</strong><br>'
+                        f'<pre style="font-size:0.72rem;color:#4a6080;background:none;border:none;margin:0;white-space:pre-wrap;">{limitations}</pre></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # Token usage
+                if token_usage:
+                    total_in  = token_usage.get("total_input", 0)
+                    total_out = token_usage.get("total_output", 0)
+                    cost      = token_usage.get("estimated_cost_gbp", 0)
+                    l1i = token_usage.get("layer1_input", 0)
+                    l2i = token_usage.get("layer2_input", 0)
+                    l3i = token_usage.get("layer3_input", 0)
+                    si  = token_usage.get("synthesis_input", 0)
+                    st.markdown(
+                        f'<div style="font-size:0.72rem;color:#3d5166;margin-top:0.5rem;border-top:1px solid #1a2535;padding-top:0.4rem;">'
+                        f'Tokens — L1: {l1i} · L2: {l2i} · L3: {l3i} · Synth: {si}'
+                        f'<br>Total: {total_in}in / {total_out}out'
+                        + (f' · Est. cost: £{cost:.4f}' if cost else "")
+                        + f'</div>',
+                        unsafe_allow_html=True,
+                    )
+        elif agentic_status == "running":
+            st.caption("Agentic analysis running…")
+        elif agentic_status == "failed":
+            st.caption("Agentic analysis failed.")
+        else:
+            st.caption("Agentic analysis pending.")
+
+    with col_act:
+        if pos_state in ("", None, "closed", "deferred"):
+            if st.button("Act", key=f"dir_act_{doc_id}",
+                         help="Record that you have taken a position."):
+                set_position_state(db, ticker, "acted")
+                st.rerun()
+
+    with col_defer:
+        if pos_state in ("", None, "closed"):
+            if st.button("Defer", key=f"dir_defer_{doc_id}",
+                         help="Interested but not acting now."):
+                set_position_state(db, ticker, "deferred")
+                st.rerun()
+
+    with col_decline:
+        if pos_state in ("", None, "closed", "deferred"):
+            if st.button("Decline", key=f"dir_decline_{doc_id}",
+                         help="Pass. Signal resets; company stays monitored."):
+                set_position_state(db, ticker, "declined")
+                st.rerun()
+
+    with col_close:
+        if pos_state == "acted":
+            if st.button("Close", key=f"dir_close_{doc_id}",
+                         help="Exit position. Signal state resets to Watching."):
+                set_position_state(db, ticker, "closed")
+                st.rerun()
+
+    with col_dismiss:
+        if pos_state in ("", None, "closed", "deferred", "declined"):
+            if st.button("Dismiss", key=f"dir_dismiss_{doc_id}",
+                         help="Permanently delete this director signal."):
+                delete_director_signal(db, doc_id)
+                st.rerun()
+
+
+def _render_director_signals_section(
+    db, director_signals: list, company_map: dict,
+    since_cutoff, pos_filter: str
+) -> None:
+    """Render the Director Lens Signals section at the top of the signals tab."""
+    if not director_signals:
+        return
+
+    # Apply filters
+    visible = []
+    for doc_id, signal in director_signals:
+        ticker  = (signal.get("ticker") or "").upper()
+        company = company_map.get(ticker, {})
+        pos     = (company.get("position_state") or "").strip()
+
+        if pos_filter == "Unreviewed" and pos:
+            continue
+        if pos_filter == "Acted"    and pos != "acted":
+            continue
+        if pos_filter == "Deferred" and pos != "deferred":
+            continue
+        if pos_filter == "Declined" and pos != "declined":
+            continue
+        if pos_filter == "Closed"   and pos != "closed":
+            continue
+        if pos == "declined" and pos_filter != "Declined":
+            continue
+        if pos == "closed" and pos_filter != "Closed":
+            continue
+        if since_cutoff:
+            try:
+                raw = signal.get("created_at")
+                if hasattr(raw, "timestamp"):
+                    dt = raw.replace(tzinfo=timezone.utc) if raw.tzinfo is None else raw
+                else:
+                    dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                if dt < since_cutoff:
+                    continue
+            except Exception:
+                pass
+        visible.append((doc_id, signal, company))
+
+    if not visible:
+        return
+
+    # Group by recommendation priority
+    grp_investigate, grp_monitor, grp_other = [], [], []
+    for item in visible:
+        _, signal, _ = item
+        rec    = (signal.get("agentic_recommendation") or "").lower()
+        status = signal.get("agentic_status") or "pending"
+        if "investigate" in rec:
+            grp_investigate.append(item)
+        elif "monitor" in rec:
+            grp_monitor.append(item)
+        else:
+            grp_other.append(item)
+
+    st.markdown(
+        '<div style="font-size:0.7rem;font-family:IBM Plex Mono,monospace;color:#a064f7;'
+        'letter-spacing:0.1em;text-transform:uppercase;margin:1rem 0 0.4rem;">Director Buying Lens</div>',
+        unsafe_allow_html=True,
+    )
+
+    if grp_investigate:
+        with st.expander(f"⬆  Investigate Further — {len(grp_investigate)}", expanded=True):
+            for item in grp_investigate:
+                _render_director_signal_card(item[0], item[1], item[2], db)
+
+    if grp_monitor:
+        with st.expander(f"◉  Monitor — {len(grp_monitor)}", expanded=True):
+            for item in grp_monitor:
+                _render_director_signal_card(item[0], item[1], item[2], db)
+
+    if grp_other:
+        with st.expander(f"—  Pending / Ignore — {len(grp_other)}", expanded=False):
+            for item in grp_other:
+                _render_director_signal_card(item[0], item[1], item[2], db)
+
+    st.markdown('<hr style="border-color:#1a2535;margin:1rem 0;">', unsafe_allow_html=True)
+
+
+def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
     # ── Filter bar ──────────────────────────────────────────────────────────────
     fc1, fc2, fc3 = st.columns([5, 2, 2])
     with fc1:
@@ -49,6 +407,10 @@ def render_signals_tab(db, signals, company_map) -> None:
         "This month": datetime.now(timezone.utc) - timedelta(days=30),
     }
     since_cutoff = _since_map.get(since_filter)
+
+    # ── Director lens signals section (above regulatory catalyst signals) ────────
+    if director_signals:
+        _render_director_signals_section(db, director_signals, company_map, since_cutoff, pos_filter)
 
     def _passes_filters(result, company):
         pos = (company.get("position_state") or "").strip()
@@ -101,12 +463,12 @@ def render_signals_tab(db, signals, company_map) -> None:
 
     total_shown = len(grp_urgent) + len(grp_action) + len(grp_monitor) + len(grp_no_action)
 
-    if total_shown == 0:
+    if total_shown == 0 and not director_signals:
         st.markdown(
             '<div class="empty-state">NO SIGNALS MATCH CURRENT FILTERS</div>',
             unsafe_allow_html=True,
         )
-    else:
+    elif total_shown > 0:
         # ── Card renderer (defined once, called per group) ───────────────────────
         def _render_signal_card(doc_id, result, company):
             analysis    = result.get("llm_analysis", "")

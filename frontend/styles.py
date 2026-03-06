@@ -124,6 +124,17 @@ html, body, [class*="css"] {
 .signal-card-compact.action-monitor { border-left-color: #7eb8f7; }
 .signal-card-compact.action-no { border-left-color: #1a2535; }
 .signal-card-compact.urgent { border-left-color: #e55353 !important; background: #140c0c; }
+.signal-card-compact.director-investigate { border-left-color: #a064f7; }
+.signal-card-compact.director-monitor { border-left-color: #7eb8f7; }
+.signal-card-compact.director-ignore { border-left-color: #1a2535; }
+.signal-card-compact.director-pending { border-left-color: #2a3040; }
+
+/* Director lens badges */
+.badge-director-investigate { background: #1a0a2a; color: #a064f7; border: 1px solid #a064f744; }
+.badge-director-monitor { background: #0a1525; color: #7eb8f7; border: 1px solid #7eb8f744; }
+.badge-director-ignore { background: #111820; color: #3d5166; border: 1px solid #1a253544; }
+.badge-director-pending { background: #111820; color: #4a6080; border: 1px solid #1a253544; }
+.badge-director-type { background: #150a2a; color: #c09af7; border: 1px solid #a064f744; }
 
 /* Compact card layout */
 .card-row-top {

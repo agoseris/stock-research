@@ -113,6 +113,35 @@ def delete_signal_result(db, doc_id: str) -> None:
     db.collection("signal_results").document(doc_id).delete()
 
 
+# ── Director lens signals (signals collection) ─────────────────────────────────
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_director_signals(_db, limit: int = 200) -> list:
+    """
+    Fetch director lens signals from the signals collection, newest first.
+    Returns list of (doc_id, data_dict) tuples.
+    """
+    try:
+        docs = (
+            _db.collection("signals")
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .stream()
+        )
+        return [(doc.id, doc.to_dict()) for doc in docs]
+    except Exception:
+        return []
+
+
+def delete_director_signal(db, doc_id: str) -> None:
+    """Hard-delete a director lens signals document. Irreversible."""
+    db.collection("signals").document(doc_id).delete()
+    try:
+        get_director_signals.clear()
+    except Exception:
+        pass
+
+
 # ── Config store ───────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)

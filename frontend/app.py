@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-VERSION = "2.46"
+VERSION = "2.47"
 
 # ── Page config ─────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,7 @@ from firestore_helpers import (
     get_pending_jobs,
     cleanup_universe_orphans,
     get_all_signals_for_ticker,
+    get_director_signals,
 )
 from parse_helpers import _parse_universe_csv, _compute_universe_delta
 from ui_helpers import parse_analysis, get_field, recommend_add_badge, format_timestamp
@@ -74,6 +75,8 @@ try:
     signals = get_signal_results(db)
 except Exception:
     signals = get_signal_results_all(db)
+
+director_signals = get_director_signals(db)
 
 try:
     discoveries = get_discovery_results(db)
@@ -155,7 +158,7 @@ tab_signals, tab_discovery, tab_universe, tab_ingest, tab_config = st.tabs([
 # ── Signals tab ──────────────────────────────────────────────────────────────────
 
 with tab_signals:
-    render_signals_tab(db, signals, company_map)
+    render_signals_tab(db, signals, company_map, director_signals=director_signals)
 
 # ── Discovery tab ────────────────────────────────────────────────────────────────
 
