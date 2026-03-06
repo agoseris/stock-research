@@ -1070,11 +1070,29 @@ limitations: be specific about what could not be assessed.\
 # ---------------------------------------------------------------------------
 
 def _parse_json_response(text: str) -> dict:
-    """Strip markdown fences and parse JSON from final agent response."""
+    """
+    Extract and parse JSON from a layer agent response.
+
+    Handles three formats the model may produce:
+      1. Bare JSON object (ideal)
+      2. ```json ... ``` fence anywhere in the text
+      3. Preamble prose followed by a JSON object (e.g. "Now I'll produce...")
+    """
     text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*```\s*$", "", text)
-    return json.loads(text.strip())
+
+    # Try to extract from a ```json ... ``` fence block anywhere in the text
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    if fence_match:
+        return json.loads(fence_match.group(1).strip())
+
+    # Fall back: find the outermost { ... } and parse that
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return json.loads(text[start:end + 1])
+
+    # Last resort: parse as-is
+    return json.loads(text)
 
 
 # ---------------------------------------------------------------------------
@@ -1131,12 +1149,18 @@ def run_layer_agent(
     for iteration in range(max_iterations):
         response = client.messages.create(
             model=model,
-            max_tokens=2000,
+            max_tokens=4096,
             tools=tools,
             messages=messages,
         )
         total_input += response.usage.input_tokens
         total_output += response.usage.output_tokens
+
+        block_types = [b.type for b in response.content]
+        logger.debug(
+            "layer%d [iter %d]: stop_reason=%s blocks=%s",
+            layer, iteration, response.stop_reason, block_types,
+        )
 
         tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
 
@@ -1162,19 +1186,77 @@ def run_layer_agent(
         else:
             # Final response — extract and parse JSON
             text_blocks = [b for b in response.content if b.type == "text"]
-            if not text_blocks:
+            text = text_blocks[0].text if text_blocks else ""
+
+            # Recovery: Anthropic API may emit text + tool_use in the same
+            # response. The loop continues for tool_use and discards the text.
+            # On the next turn the model returns empty text (already spoke).
+            # Scan backwards through message history to recover the JSON.
+            if not text.strip():
+                for msg in reversed(messages):
+                    if msg.get("role") != "assistant":
+                        continue
+                    for block in msg.get("content", []):
+                        if (hasattr(block, "type") and block.type == "text"
+                                and block.text.strip()):
+                            text = block.text
+                            logger.info(
+                                "layer%d: recovered text from prior assistant turn", layer
+                            )
+                            break
+                    if text.strip():
+                        break
+
+            # Retry: if text is still empty, nudge the model to produce JSON
+            # without tools. This handles the case where the model ends its
+            # turn silently after tool calls (stop_reason=end_turn, empty text).
+            if not text.strip():
+                logger.warning(
+                    "layer%d: empty final response (stop_reason=%s), retrying with explicit JSON request",
+                    layer, response.stop_reason,
+                )
+                retry_messages = list(messages) + [
+                    {"role": "assistant", "content": response.content},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your previous response was empty. "
+                            "Please now output your complete structured JSON analysis "
+                            "exactly as specified in the original instructions. "
+                            "Output ONLY the JSON object — no preamble, no explanation."
+                        ),
+                    },
+                ]
+                retry_resp = client.messages.create(
+                    model=model,
+                    max_tokens=4096,
+                    messages=retry_messages,
+                )
+                total_input += retry_resp.usage.input_tokens
+                total_output += retry_resp.usage.output_tokens
+                retry_text_blocks = [b for b in retry_resp.content if b.type == "text"]
+                text = retry_text_blocks[0].text if retry_text_blocks else ""
+                if text.strip():
+                    logger.info("layer%d: retry succeeded (%d chars)", layer, len(text))
+                else:
+                    logger.error(
+                        "layer%d: retry also empty (stop_reason=%s)",
+                        layer, retry_resp.stop_reason,
+                    )
+
+            if not text.strip():
                 logger.error("layer%d: final response has no text block", layer)
                 return (
                     {"_error": "no text block in final response"},
                     {"input": total_input, "output": total_output, "model": model},
                 )
             try:
-                output = _parse_json_response(text_blocks[0].text)
+                output = _parse_json_response(text)
             except (json.JSONDecodeError, ValueError) as exc:
                 logger.error("layer%d: JSON parse failed: %s", layer, exc)
                 output = {
                     "_error": f"JSON parse failed: {exc}",
-                    "_raw_text": text_blocks[0].text[:500],
+                    "_raw_text": text[:500],
                 }
             logger.info(
                 "layer%d: complete — %d input tokens, %d output tokens",
