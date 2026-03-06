@@ -313,3 +313,65 @@ def persist_simple_lens_result(
     }
 
     db.collection("signals").document(rns_article_id).set(doc, merge=True)
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: signals collection — agentic status + layer outputs
+# ---------------------------------------------------------------------------
+
+def update_agentic_status(
+    rns_article_id: str,
+    status: str,
+    db=None,
+) -> None:
+    """
+    Update agentic_status on the signals document.
+
+    Called at investigation start ("running") and end ("complete"|"failed"|"partial").
+
+    Parameters
+    ----------
+    rns_article_id : str
+        The signals document_id.
+    status : str
+        One of: "pending", "running", "complete", "failed", "partial".
+    db : Firestore client, optional
+    """
+    db = db or _get_db()
+    db.collection("signals").document(rns_article_id).set(
+        {"agentic_status": status},
+        merge=True,
+    )
+
+
+def persist_layer_outputs(
+    rns_article_id: str,
+    layer1_output: Optional[dict],
+    layer2_output: Optional[dict],
+    layer3_output: Optional[dict],
+    db=None,
+) -> None:
+    """
+    Write the three layer agent outputs to the signals document.
+
+    Called after all three layers complete (or fail) in the sequential or
+    parallel runner. None values for failed layers are written as-is —
+    the synthesis agent handles them as explicit failure markers.
+
+    Parameters
+    ----------
+    rns_article_id : str
+        The signals document_id.
+    layer1_output, layer2_output, layer3_output : dict | None
+        Parsed JSON output from each layer agent. None if that layer failed.
+    db : Firestore client, optional
+    """
+    db = db or _get_db()
+    db.collection("signals").document(rns_article_id).set(
+        {
+            "agentic_layer1_output": layer1_output,
+            "agentic_layer2_output": layer2_output,
+            "agentic_layer3_output": layer3_output,
+        },
+        merge=True,
+    )
