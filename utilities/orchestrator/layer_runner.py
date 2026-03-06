@@ -8,9 +8,11 @@ Provides:
   - Prompt builders (_build_layer1_prompt, _build_layer2_prompt, _build_layer3_prompt)
   - Tool-use loop (run_layer_agent)
   - Sequential orchestrator (run_agentic_investigation_sequential)
+  - Parallel orchestrator (run_agentic_investigation_parallel)
   - Helpers (should_trigger_credibility_research, prefetch_price_data)
 """
 
+import concurrent.futures
 import json
 import logging
 import re
@@ -1413,6 +1415,179 @@ def run_agentic_investigation_sequential(
     elapsed = (datetime.now(tz=timezone.utc) - started_at).total_seconds()
     logger.info(
         "agentic_sequential: complete in %.1fs — l1=%s l2=%s l3=%s",
+        elapsed,
+        "ok" if l1_output and "_error" not in l1_output else "failed",
+        "ok" if l2_output and "_error" not in l2_output else "failed",
+        "ok" if l3_output and "_error" not in l3_output else "failed",
+    )
+
+    return layer_results
+
+
+# ---------------------------------------------------------------------------
+# Parallel orchestrator — Stage 4
+# ---------------------------------------------------------------------------
+
+def run_agentic_investigation_parallel(
+    rns_article_id: str,
+    announcement: dict,
+    transaction: dict,
+    company_profile: dict,
+    client,
+    db=None,
+    config: Optional[dict] = None,
+) -> dict:
+    """
+    Run three layer agents in parallel using ThreadPoolExecutor.
+
+    All three layers start simultaneously after the shared price pre-fetch
+    completes. The orchestrator waits for all three (or until the
+    layer_timeout_seconds threshold fires), then persists all results.
+
+    Partial failures are handled gracefully: a timed-out or failed layer
+    produces a None output, which is passed to the caller (and later to
+    the Synthesis agent as an explicit failure marker).
+
+    Parameters
+    ----------
+    rns_article_id : str
+        The signals Firestore document_id (deduplication key).
+    announcement : dict
+        Full announcement dict including headline, summary, key_topics.
+    transaction : dict
+        Parsed pdmr_transaction dict (open-market transaction only).
+    company_profile : dict
+        Company profile from get_company_profile() or universe_companies.
+    client : anthropic.Anthropic
+        Anthropic API client. Shared across threads — Anthropic's SDK is
+        thread-safe for concurrent message creation.
+    db : Firestore client, optional
+    config : dict, optional
+
+    Returns
+    -------
+    dict with keys "layer1", "layer2", "layer3".
+        Each value: {"output": dict | None, "tokens": dict}
+        output is None if the layer timed out or raised an unexpected error.
+    """
+    cfg = config or ORCHESTRATOR_CONFIG
+    timeout_seconds = cfg.get("layer_timeout_seconds", 300)
+    started_at = datetime.now(tz=timezone.utc)
+
+    update_agentic_status(rns_article_id, "running", db=db)
+
+    # Pre-fetch shared price data (sequential — must complete before layers start)
+    price_cache = prefetch_price_data(
+        ticker=transaction.get("ticker", ""),
+        transaction_date=transaction.get("transaction_date_actual"),
+        published_at=transaction.get("transaction_date_reported"),
+        reporting_lag_days=transaction.get("reporting_lag_days", 0),
+    )
+
+    # Build layer callables
+    use_credibility = should_trigger_credibility_research(transaction, cfg)
+    l2_model = (
+        cfg.get("layer2_model_credibility", "claude-sonnet-4-6")
+        if use_credibility
+        else cfg.get("layer2_model_standard", "claude-haiku-4-5-20251001")
+    )
+
+    l1_inputs = build_layer1_inputs(transaction, company_profile)
+    l2_inputs = {**build_layer2_inputs(transaction), "rns_article_id": rns_article_id}
+    ann = {**announcement, "rns_article_id": rns_article_id}
+    l3_inputs = build_layer3_inputs(transaction, ann, company_profile, price_cache)
+
+    def _run_l1():
+        return run_layer_agent(
+            layer=1,
+            inputs=l1_inputs,
+            tools=LAYER1_TOOLS,
+            model=cfg.get("layer1_model", "claude-haiku-4-5-20251001"),
+            client=client,
+            executor=_make_layer1_executor(price_cache),
+        )
+
+    def _run_l2():
+        return run_layer_agent(
+            layer=2,
+            inputs=l2_inputs,
+            tools=LAYER2_TOOLS,
+            model=l2_model,
+            client=client,
+            executor=_make_layer2_executor(),
+        )
+
+    def _run_l3():
+        return run_layer_agent(
+            layer=3,
+            inputs=l3_inputs,
+            tools=LAYER3_TOOLS,
+            model=cfg.get("layer3_model", "claude-sonnet-4-6"),
+            client=client,
+            executor=_make_layer3_executor(price_cache),
+        )
+
+    layer_results: dict = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        future_l1 = pool.submit(_run_l1)
+        future_l2 = pool.submit(_run_l2)
+        future_l3 = pool.submit(_run_l3)
+
+        logger.info(
+            "agentic_parallel: L1/L2/L3 submitted — %s (credibility=%s)",
+            transaction.get("ticker"), use_credibility,
+        )
+
+        done, not_done = concurrent.futures.wait(
+            [future_l1, future_l2, future_l3],
+            timeout=timeout_seconds,
+        )
+
+        if not_done:
+            layer_nums = []
+            for f in not_done:
+                if f is future_l1:
+                    layer_nums.append(1)
+                elif f is future_l2:
+                    layer_nums.append(2)
+                elif f is future_l3:
+                    layer_nums.append(3)
+                f.cancel()
+            logger.error(
+                "agentic_parallel: layers %s timed out after %ds",
+                layer_nums, timeout_seconds,
+            )
+
+    # Collect results — None for any layer that timed out or raised
+    def _collect(future, layer_num, default_model_key):
+        if future not in done:
+            return None, {"input": 0, "output": 0, "model": cfg.get(default_model_key, "")}
+        try:
+            return future.result()
+        except Exception as exc:
+            logger.error("agentic_parallel: layer%d raised: %s", layer_num, exc)
+            return None, {"input": 0, "output": 0, "model": cfg.get(default_model_key, "")}
+
+    l1_output, l1_tokens = _collect(future_l1, 1, "layer1_model")
+    l2_output, l2_tokens = _collect(future_l2, 2, "layer2_model_standard")
+    l3_output, l3_tokens = _collect(future_l3, 3, "layer3_model")
+
+    layer_results["layer1"] = {"output": l1_output, "tokens": l1_tokens}
+    layer_results["layer2"] = {"output": l2_output, "tokens": l2_tokens}
+    layer_results["layer3"] = {"output": l3_output, "tokens": l3_tokens}
+
+    persist_layer_outputs(
+        rns_article_id=rns_article_id,
+        layer1_output=l1_output,
+        layer2_output=l2_output,
+        layer3_output=l3_output,
+        db=db,
+    )
+
+    elapsed = (datetime.now(tz=timezone.utc) - started_at).total_seconds()
+    logger.info(
+        "agentic_parallel: complete in %.1fs — l1=%s l2=%s l3=%s",
         elapsed,
         "ok" if l1_output and "_error" not in l1_output else "failed",
         "ok" if l2_output and "_error" not in l2_output else "failed",

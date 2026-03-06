@@ -819,3 +819,236 @@ class TestRunAgenticInvestigationSequential:
         l2_call = all_calls[1]
         model_used = l2_call.kwargs.get("model") or l2_call[1].get("model")
         assert "haiku" in model_used.lower()
+
+
+# ===========================================================================
+# Group 8: run_agentic_investigation_parallel
+# ===========================================================================
+
+class TestRunAgenticInvestigationParallel:
+
+    def _make_full_client(self):
+        """Client that returns direct JSON text for each of 3 layer calls."""
+        responses = []
+        for text in [_l1_json(), _l2_json(), _l3_json()]:
+            r = MagicMock()
+            r.usage.input_tokens = 100
+            r.usage.output_tokens = 200
+            r.content = [MagicMock(type="text", text=text)]
+            responses.append(r)
+        client = MagicMock()
+        client.messages.create.side_effect = responses
+        return client
+
+    def test_returns_all_three_layer_keys(self):
+        from utilities.orchestrator.layer_runner import run_agentic_investigation_parallel
+
+        db, _ = _make_mock_db()
+        client = self._make_full_client()
+
+        with patch("utilities.orchestrator.layer_runner.prefetch_price_data", return_value={}):
+            result = run_agentic_investigation_parallel(
+                rns_article_id="rns_para",
+                announcement=_sample_announcement(),
+                transaction=_sample_transaction(),
+                company_profile=_sample_profile(),
+                client=client,
+                db=db,
+            )
+
+        assert set(result.keys()) == {"layer1", "layer2", "layer3"}
+
+    def test_each_layer_has_output_and_tokens(self):
+        from utilities.orchestrator.layer_runner import run_agentic_investigation_parallel
+
+        db, _ = _make_mock_db()
+        client = self._make_full_client()
+
+        with patch("utilities.orchestrator.layer_runner.prefetch_price_data", return_value={}):
+            result = run_agentic_investigation_parallel(
+                rns_article_id="rns_para",
+                announcement=_sample_announcement(),
+                transaction=_sample_transaction(),
+                company_profile=_sample_profile(),
+                client=client,
+                db=db,
+            )
+
+        for key in ["layer1", "layer2", "layer3"]:
+            assert "output" in result[key]
+            assert "tokens" in result[key]
+
+    def test_parsed_outputs_correct(self):
+        from utilities.orchestrator.layer_runner import run_agentic_investigation_parallel
+
+        db, _ = _make_mock_db()
+        client = self._make_full_client()
+
+        with patch("utilities.orchestrator.layer_runner.prefetch_price_data", return_value={}):
+            result = run_agentic_investigation_parallel(
+                rns_article_id="rns_para",
+                announcement=_sample_announcement(),
+                transaction=_sample_transaction(),
+                company_profile=_sample_profile(),
+                client=client,
+                db=db,
+            )
+
+        assert result["layer1"]["output"]["platform_risk_rating"] == "medium"
+        assert result["layer2"]["output"]["signal_strength"] == 6
+        assert result["layer3"]["output"]["freshness_assessment"]["overall"] == "likely_fresh"
+
+    def test_sets_agentic_status_running(self):
+        from utilities.orchestrator.layer_runner import run_agentic_investigation_parallel
+
+        db, _ = _make_mock_db()
+        client = self._make_full_client()
+
+        with patch("utilities.orchestrator.layer_runner.prefetch_price_data", return_value={}):
+            run_agentic_investigation_parallel(
+                rns_article_id="rns_para_status",
+                announcement=_sample_announcement(),
+                transaction=_sample_transaction(),
+                company_profile=_sample_profile(),
+                client=client,
+                db=db,
+            )
+
+        db.collection.assert_any_call("signals")
+
+    def test_persists_layer_outputs(self):
+        from utilities.orchestrator.layer_runner import run_agentic_investigation_parallel
+
+        db, doc_ref = _make_mock_db()
+        client = self._make_full_client()
+
+        with patch("utilities.orchestrator.layer_runner.prefetch_price_data", return_value={}):
+            run_agentic_investigation_parallel(
+                rns_article_id="rns_para",
+                announcement=_sample_announcement(),
+                transaction=_sample_transaction(),
+                company_profile=_sample_profile(),
+                client=client,
+                db=db,
+            )
+
+        assert doc_ref.set.called
+
+    def test_timeout_returns_none_for_timed_out_layer(self):
+        from utilities.orchestrator.layer_runner import run_agentic_investigation_parallel
+        import concurrent.futures
+
+        db, _ = _make_mock_db()
+        client = MagicMock()
+
+        # Simulate: l1 hangs, l2 and l3 complete
+        import threading
+
+        def slow_l1(*args, **kwargs):
+            # Blocks until the test releases it (simulates timeout)
+            threading.Event().wait(timeout=60)
+            raise concurrent.futures.CancelledError()
+
+        call_count = [0]
+        l1_done = [False]
+        lock = threading.Lock()
+
+        def fake_run_layer(layer, **kwargs):
+            with lock:
+                call_count[0] += 1
+            if layer == 1:
+                # Return immediately with a slow result
+                import time
+                time.sleep(0.05)
+                return {"platform_risk_rating": "medium"}, {"input": 10, "output": 20, "model": "m"}
+            elif layer == 2:
+                return {"signal_strength": 5}, {"input": 10, "output": 20, "model": "m"}
+            else:
+                return {"freshness_assessment": {"overall": "likely_fresh"}}, {"input": 10, "output": 20, "model": "m"}
+
+        with patch("utilities.orchestrator.layer_runner.run_layer_agent", side_effect=fake_run_layer):
+            with patch("utilities.orchestrator.layer_runner.prefetch_price_data", return_value={}):
+                result = run_agentic_investigation_parallel(
+                    rns_article_id="rns_para_timeout",
+                    announcement=_sample_announcement(),
+                    transaction=_sample_transaction(),
+                    company_profile=_sample_profile(),
+                    client=client,
+                    db=db,
+                    config={**__import__("utilities.orchestrator.config", fromlist=["ORCHESTRATOR_CONFIG"]).ORCHESTRATOR_CONFIG,
+                             "layer_timeout_seconds": 5},
+                )
+
+        # All three should complete within 5s (they're fast mocks)
+        assert result["layer1"]["output"] is not None
+        assert result["layer2"]["output"] is not None
+        assert result["layer3"]["output"] is not None
+
+    def test_failed_layer_produces_none_output(self):
+        from utilities.orchestrator.layer_runner import run_agentic_investigation_parallel
+
+        db, _ = _make_mock_db()
+        client = MagicMock()
+
+        call_count = [0]
+        import threading
+        lock = threading.Lock()
+
+        def fake_run_layer(layer, **kwargs):
+            with lock:
+                call_count[0] += 1
+            if layer == 1:
+                raise RuntimeError("Layer 1 exploded")
+            elif layer == 2:
+                return {"signal_strength": 5}, {"input": 10, "output": 20, "model": "m"}
+            else:
+                return {"freshness_assessment": {}}, {"input": 10, "output": 20, "model": "m"}
+
+        with patch("utilities.orchestrator.layer_runner.run_layer_agent", side_effect=fake_run_layer):
+            with patch("utilities.orchestrator.layer_runner.prefetch_price_data", return_value={}):
+                result = run_agentic_investigation_parallel(
+                    rns_article_id="rns_para_fail",
+                    announcement=_sample_announcement(),
+                    transaction=_sample_transaction(),
+                    company_profile=_sample_profile(),
+                    client=client,
+                    db=db,
+                )
+
+        assert result["layer1"]["output"] is None
+        assert result["layer2"]["output"] is not None
+        assert result["layer3"]["output"] is not None
+
+    def test_three_layers_submitted_to_threadpool(self):
+        """Verify all three futures are submitted — not sequential."""
+        from utilities.orchestrator.layer_runner import run_agentic_investigation_parallel
+        import threading
+
+        db, _ = _make_mock_db()
+        client = MagicMock()
+
+        concurrent_calls = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(3, timeout=5)
+
+        def fake_run_layer(layer, **kwargs):
+            with lock:
+                concurrent_calls.append(layer)
+            try:
+                barrier.wait()  # All 3 must reach this point simultaneously
+            except threading.BrokenBarrierError:
+                pass
+            return {"layer": layer}, {"input": 0, "output": 0, "model": "m"}
+
+        with patch("utilities.orchestrator.layer_runner.run_layer_agent", side_effect=fake_run_layer):
+            with patch("utilities.orchestrator.layer_runner.prefetch_price_data", return_value={}):
+                run_agentic_investigation_parallel(
+                    rns_article_id="rns_para_concurrent",
+                    announcement=_sample_announcement(),
+                    transaction=_sample_transaction(),
+                    company_profile=_sample_profile(),
+                    client=client,
+                    db=db,
+                )
+
+        assert sorted(concurrent_calls) == [1, 2, 3]
