@@ -248,3 +248,68 @@ def persist_news_summary(
     ref = db.collection("company_news_summaries").document()
     ref.set(doc)
     return ref.id
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: signals collection — simple lens output
+# ---------------------------------------------------------------------------
+
+def persist_simple_lens_result(
+    rns_article_id: str,
+    ticker: str,
+    company_name: str,
+    published_at,
+    signal_type: str,
+    simple_result: dict,
+    db=None,
+) -> None:
+    """
+    Create or update the signals document with simple lens output.
+
+    The signals document is keyed on rns_article_id — one document per RNS
+    article, shared by both the simple lens and agentic investigation outputs.
+    merge=True ensures this call never overwrites agentic fields written later.
+
+    Parameters
+    ----------
+    rns_article_id : str
+        The signals document_id (deduplication key).
+    ticker : str
+    company_name : str
+    published_at : datetime | str
+        Publication timestamp of the RNS filing.
+    signal_type : str
+        "director_buying" | "director_disposal"
+    simple_result : dict
+        Parsed output from parse_simple_lens_response(). Expected keys:
+        TRANSACTION_NATURE, POSITION_CHANGE_PCT, SIGNAL_STRENGTH,
+        SIGNAL_DIRECTION, RECOMMENDED_ACTION, LIMITATIONS, SUMMARY.
+    db : Firestore client, optional
+    """
+    db = db or _get_db()
+
+    doc = {
+        # Identity (written on creation, preserved on update via merge)
+        "ticker": ticker,
+        "company_name": company_name,
+        "published_at": published_at,
+        "signal_type": signal_type,
+        # Simple lens output
+        "simple_completed_at": datetime.now(tz=timezone.utc),
+        "simple_transaction_nature": simple_result.get("TRANSACTION_NATURE"),
+        "simple_position_change_pct": simple_result.get("POSITION_CHANGE_PCT"),
+        "simple_signal_strength": simple_result.get("SIGNAL_STRENGTH"),
+        "simple_signal_direction": simple_result.get("SIGNAL_DIRECTION"),
+        "simple_recommended_action": simple_result.get("RECOMMENDED_ACTION"),
+        "simple_limitations": simple_result.get("LIMITATIONS"),
+        "simple_summary": simple_result.get("SUMMARY"),
+        # Agentic status — pending until Stage 3+ completes
+        "agentic_status": "pending",
+        # Investor decision — pending until human acts
+        "investor_action": "pending",
+        # Housekeeping
+        "created_at": datetime.now(tz=timezone.utc),
+        "expires_at": _expires_at(SIGNAL_TTL_DAYS),
+    }
+
+    db.collection("signals").document(rns_article_id).set(doc, merge=True)
