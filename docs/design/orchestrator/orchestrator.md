@@ -108,6 +108,46 @@ Extends the existing Phase 2 ingestion loop. For every candidate
 article that has passed Phase 1 filtering, fetches the article 
 body and calls the classification and extraction prompt.
 
+The classification operates on the **full article body text** —
+not the headline alone, and without prior summarisation. This is
+deliberate: regulatory catalysts are frequently embedded within
+broader announcements (trading updates, operational news) and
+would be missed by headline-only or summary-based classification.
+
+### Classification routing rules
+
+The classification prompt enforces a strict priority order:
+
+```
+Priority 1 — pdmr_transaction
+  Any article containing a director/PDMR share transaction.
+  Takes precedence over all other content in the filing.
+
+Priority 2 — regulatory_catalyst  
+  Any article containing a regulatory approval, licence, permit,
+  consent, or rejection — even if surrounded by other content.
+  A catalyst buried in a trading update is still a catalyst.
+  Takes precedence over substantive_news.
+
+Priority 3 — substantive_news
+  Trading updates, results, operational news, fundraising.
+  Only assigned when no higher-priority content is present.
+
+Priority 4 — administrative
+  Routine, non-material filings with no signal content.
+```
+
+**Known limitation — combined filings:**
+The classification returns a single `article_type`. A filing
+containing both a regulatory catalyst and substantive news is
+classified as `regulatory_catalyst` (priority 2 applies). The
+substantive news summary is not stored in this case — the more
+important signal is preserved at the cost of the news archive.
+This is an accepted PoC limitation, pinned for future handling.
+The inverse (a substantive_news filing misclassified as
+regulatory_catalyst) is the lesser risk — the signal is caught,
+only the news summary is missed.
+
 ### Where it fits in existing code
 
 The existing Phase 2 loop calls the LLM with `lens_catalyst` 
@@ -125,7 +165,7 @@ for article in candidate_articles:
 for article in candidate_articles:
     body = headless_browser.fetch(article.source_url)
     
-    # NEW: classify and extract
+    # NEW: classify and extract (full body text, not headline only)
     classification = llm.call(
         classification_extraction_prompt, 
         body,
@@ -135,7 +175,7 @@ for article in candidate_articles:
     # NEW: persist classification to announcements
     update_announcement(article.id, classification)
     
-    # NEW: route based on classification
+    # NEW: route based on classification priority
     if classification.article_type == "pdmr_transaction":
         for transaction in classification.transactions:
             persist_pdmr_transaction(transaction)
@@ -143,20 +183,24 @@ for article in candidate_articles:
                 "open_market_purchase", 
                 "open_market_disposal"
             ]:
-                # NEW: trigger orchestrator
+                # NEW: trigger both director lenses
                 orchestrator.run(article, transaction)
+            # sip_purchase, drip_purchase, option_exercise etc.
+            # → stored in pdmr_transactions only, no lens triggered
     
     elif classification.article_type == "regulatory_catalyst":
         # EXISTING: call lens_catalyst as before
+        # Note: may contain substantive news content — not stored
+        # separately. Accepted PoC limitation.
         result = llm.call(lens_catalyst_prompt, body)
         store_result(result)
     
     elif classification.article_type == "substantive_news":
-        # NEW: persist summary, no lens
+        # NEW: persist summary to company_news_summaries, no lens
         persist_news_summary(classification)
     
     elif classification.article_type == "administrative":
-        # NEW: update classification only
+        # NEW: update classification only, no child documents
         pass
 ```
 

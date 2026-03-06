@@ -36,6 +36,9 @@ Body: {announcement.body}
 
 STEP 1 — CLASSIFY
 
+You are classifying based on the FULL body text of the article,
+not the headline alone. Read the complete content before deciding.
+
 Classify this article as exactly one of:
 - pdmr_transaction: A director or PDMR share transaction notification
 - regulatory_catalyst: Regulatory approval, planning permission, 
@@ -45,6 +48,36 @@ Classify this article as exactly one of:
 - administrative: Meeting notices, date changes, routine filings, 
   director appointments/resignations with no transaction, 
   or other non-material announcements
+
+CLASSIFICATION PRIORITY RULES:
+
+1. pdmr_transaction takes priority over all other types.
+   If the article contains a director or PDMR share transaction,
+   classify as pdmr_transaction regardless of other content.
+
+2. regulatory_catalyst takes priority over substantive_news.
+   If the article contains a clear regulatory catalyst event —
+   approval, licence, permit, consent, rejection, or similar —
+   AND other substantive content, classify as regulatory_catalyst.
+   A regulatory catalyst buried in a trading update is still a
+   regulatory_catalyst. The presence of surrounding narrative
+   does not demote it to substantive_news.
+   
+3. substantive_news only if no higher-priority content is present.
+   Classify as substantive_news only when the article contains
+   no director transaction and no regulatory catalyst event.
+
+4. administrative only if the content is genuinely non-material.
+   Routine filings, process announcements, and housekeeping notices
+   with no transaction, catalyst, or substantive operational content.
+
+KNOWN LIMITATION — COMBINED FILINGS:
+This prompt returns a single article_type. A filing that genuinely
+contains both a regulatory catalyst and substantive news will be
+classified as regulatory_catalyst (per priority rule 2). The
+substantive news summary will not be stored in this case. This is
+an accepted PoC limitation — the more important signal (catalyst)
+is preserved. This limitation is pinned for future handling.
 
 STEP 2 — EXTRACT TRANSACTIONS (only if pdmr_transaction)
 
