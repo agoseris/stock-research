@@ -23,6 +23,7 @@ For always-on operation, use the systemd service:
     backend/systemd/job_runner.service
 """
 
+import hashlib
 import os
 import sys
 import time
@@ -32,6 +33,17 @@ from typing import Optional
 from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+import anthropic
+from utilities.orchestrator.classification import (
+    classify_article,
+    get_open_market_transactions,
+)
+from utilities.orchestrator.simple_lens import run_simple_lens
 
 from abstractions import Announcement, UniverseCompany
 from google.cloud import firestore
@@ -72,6 +84,7 @@ class JobRunner:
         self.lenses = [RegulatoryCatalystLens()]
         self.llm = GeminiProvider()
         self.notifier = TelegramNotifier()
+        self.anthropic_client = anthropic.Anthropic()
 
         self._universe_tickers = self._load_universe_tickers()
         print(f"[{_ts()}] Job runner ready. Polling pending_jobs every {POLL_INTERVAL}s.")
@@ -235,6 +248,54 @@ REASON: [one sentence]"""
 
         print(f"  [{announcement.ticker}] Discovery assessment failed after 3 attempts.")
         return None
+
+    def _run_pdmr_flow(
+        self,
+        job_id: str,
+        announcement: Announcement,
+        classification: dict,
+        job: dict,
+        rns_article_id: str,
+    ):
+        """
+        Handle a PDMR transaction article: run the simple lens for each
+        open-market transaction and persist results to the signals collection.
+        The agentic investigation is handled separately by scripts/run_orchestrator.py
+        (runs locally due to yfinance residential-IP requirement).
+        """
+        ticker = announcement.ticker
+        open_market_txs = get_open_market_transactions(classification)
+        if not open_market_txs:
+            print(f"  [{ticker}] PDMR: no open-market transactions — skipping simple lens.")
+            self._complete_job(job_id, note="pdmr_no_open_market")
+            return
+
+        company = self.universe_storage.get_company(ticker)
+        company_profile = _build_company_profile(company)
+
+        for tx in open_market_txs:
+            tx_enriched = dict(tx)
+            tx_enriched["ticker"] = announcement.ticker
+            tx_enriched["company_name"] = announcement.company_name
+            try:
+                simple_result, _tokens = run_simple_lens(
+                    rns_article_id=rns_article_id,
+                    transaction=tx_enriched,
+                    company_profile=company_profile,
+                    client=self.anthropic_client,
+                    db=self.db,
+                )
+                rec = simple_result.get("RECOMMENDED_ACTION", "unknown")
+                print(f"  [{ticker}] Simple lens: {rec} "
+                      f"(director: {tx.get('director_name', '?')})")
+            except Exception as e:
+                print(f"  [{ticker}] Simple lens failed "
+                      f"for {tx.get('director_name', '?')}: {e}")
+
+        self._complete_job(
+            job_id,
+            note=f"pdmr_simple_lens_done:{len(open_market_txs)}_txs",
+        )
 
     # ------------------------------------------------------------------
     # Notifications
@@ -525,6 +586,36 @@ REASON: [one sentence]"""
 
             now = datetime.now(timezone.utc)
             if ticker.upper() in self._universe_tickers:
+                # Classify the article to route PDMR transactions to the director lens
+                rns_article_id = _compute_fingerprint(
+                    announcement.source_url or announcement.headline
+                )
+                try:
+                    classification, _cls_tokens = classify_article(
+                        rns_article_id=rns_article_id,
+                        announcement={
+                            "company_name": announcement.company_name,
+                            "ticker": announcement.ticker,
+                            "source_name": announcement.source_name,
+                            "headline": announcement.headline,
+                            "body": announcement.body,
+                            "published_at": str(announcement.published_at),
+                        },
+                        client=self.anthropic_client,
+                        db=self.db,
+                    )
+                    article_type = classification.get("article_type", "unclassified")
+                    print(f"  [{ticker}] Classification: {article_type}")
+                except Exception as e:
+                    print(f"  [{ticker}] Classification failed: {e} — falling back to regulatory lens.")
+                    article_type = "unclassified"
+                    classification = {}
+
+                if article_type == "pdmr_transaction":
+                    self._run_pdmr_flow(job_id, announcement, classification, job, rns_article_id)
+                    return
+
+                # Non-PDMR: run regulatory catalyst lens
                 result = self._run_signal_analysis(announcement)
                 if result:
                     # Enrich with price (from LSEG index page) and market cap (from Firestore)
@@ -603,6 +694,31 @@ REASON: [one sentence]"""
 def _ts() -> str:
     """Current UTC time as HH:MM:SS for log prefixes."""
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
+
+
+def _compute_fingerprint(text: str) -> str:
+    """
+    SHA-256 fingerprint of normalised text.
+    Matches FirestoreProvider._fingerprint — used as the rns_article_id
+    that links announcements, pdmr_transactions, and signals documents.
+    """
+    normalised = " ".join(
+        "".join(c for c in text.lower() if c.isalnum() or c.isspace()).split()
+    )
+    return hashlib.sha256(normalised.encode()).hexdigest()
+
+
+def _build_company_profile(company) -> dict:
+    """Build the company_profile dict expected by run_simple_lens."""
+    if company is None:
+        return {}
+    listing = getattr(company, "listing_exchange", "") or ""
+    index = "AIM" if listing == "AIM" else "MAIN_MARKET"
+    return {
+        "market_cap_gbp": getattr(company, "market_cap_gbp", None),
+        "market_cap_stale": True,
+        "index_membership": index,
+    }
 
 
 # ---------------------------------------------------------------------------

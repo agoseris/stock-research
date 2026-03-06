@@ -6,3 +6,4 @@ google-genai
 python-telegram-bot
 pandas
 openpyxl
+anthropic

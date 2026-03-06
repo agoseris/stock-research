@@ -117,7 +117,7 @@ def render_ingest_tab(db) -> None:
         # Filter summary metrics
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Total rows", result["total_rows"])
-        c2.metric("Skipped (non-RNS)", result["skipped_source"])
+        c2.metric("Skipped (no source)", result["skipped_source"])
         c3.metric("Passed filters", len(result["passed"]))
         c4.metric("Non-universe (skipped)", len(result["discovery"]))
         c5.metric("Suppressed", len(result["suppressed"]))

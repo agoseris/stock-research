@@ -15,7 +15,7 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-VERSION = "2.47"
+VERSION = "2.48"
 
 # ── Page config ─────────────────────────────────────────────────────────────────
 

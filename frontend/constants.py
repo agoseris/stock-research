@@ -7,7 +7,6 @@ _CONFIG_COLLECTION = "app_config"
 _LSEG_FILTERS_DOC = "lseg_filters"
 
 _DEFAULT_EXCLUDED_TYPES = [
-    "Holding(s) in Company",
     "Notice of AGM",
     "Notice of Results",
     "Annual Report",

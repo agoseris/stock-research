@@ -20,7 +20,7 @@ def _filter_announcement_rows(rows, universe_tickers, excluded_types,
     source_url, published_at, price_pence, price_change_pct.
 
     Filtering order:
-      1. Source filter     — only RNS rows proceed
+      1. Source filter     — rows with no source skipped; RNS, EQS, PRN, GNW etc. all accepted
       2. Universe filter   — non-universe rows route to discovery
       2.5. Name filter     — company_keywords matched against company name; matched rows suppressed
       2.8. Muted filter    — not_of_interest tickers suppressed
@@ -38,7 +38,10 @@ def _filter_announcement_rows(rows, universe_tickers, excluded_types,
         source_val = row_dict.get("source", "")
 
         # Filter 1: Source
-        if source_val.upper() != "RNS":
+        # Accept any non-empty source — RNS, EQS, PRN, GNW etc. are all
+        # legitimate regulated disclosure wires that carry PDMR filings.
+        # Classification routes each announcement to the correct lens.
+        if not source_val:
             skipped_source += 1
             continue
 
