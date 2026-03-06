@@ -30,11 +30,10 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from dotenv import load_dotenv, find_dotenv
-
-load_dotenv(find_dotenv())
+from dotenv import load_dotenv
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
