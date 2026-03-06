@@ -12,7 +12,7 @@ Later stages add:
   - persist_simple_lens_result (Stage 2)
   - update_agentic_status (Stage 3)
   - persist_layer_outputs (Stage 3)
-  - persist_synthesis_result (Stage 5)
+  - persist_synthesis_result (Stage 5) — complete
 
 All functions accept an optional `db` parameter so tests can inject a mock.
 When db=None, the lazy singleton is used.
@@ -375,3 +375,52 @@ def persist_layer_outputs(
         },
         merge=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage 5: signals collection — synthesis result
+# ---------------------------------------------------------------------------
+
+def persist_synthesis_result(
+    rns_article_id: str,
+    synthesis_result: dict,
+    token_usage: dict,
+    db=None,
+) -> None:
+    """
+    Write synthesis agent output to the signals document.
+
+    Called after run_synthesis completes. Sets agentic_status to "complete"
+    on success or "failed" if the synthesis result contains a parse error.
+
+    Parameters
+    ----------
+    rns_article_id : str
+        The signals document_id.
+    synthesis_result : dict
+        Parsed synthesis JSON. Contains "_error" key if parse failed.
+    token_usage : dict
+        Aggregated token usage from aggregate_token_usage().
+    db : Firestore client, optional
+    """
+    db = db or _get_db()
+
+    if "_error" in synthesis_result:
+        update = {
+            "agentic_status": "failed",
+            "agentic_completed_at": datetime.now(tz=timezone.utc),
+            "agentic_synthesis_error": synthesis_result.get("_error"),
+            "agentic_token_usage": token_usage,
+        }
+    else:
+        update = {
+            "agentic_status": "complete",
+            "agentic_completed_at": datetime.now(tz=timezone.utc),
+            "agentic_recommendation": synthesis_result.get("recommendation"),
+            "agentic_justification": synthesis_result.get("recommendation_justification"),
+            "agentic_limitations": synthesis_result.get("limitations"),
+            "agentic_synthesis_full": synthesis_result,
+            "agentic_token_usage": token_usage,
+        }
+
+    db.collection("signals").document(rns_article_id).set(update, merge=True)
