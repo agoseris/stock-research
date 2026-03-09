@@ -13,7 +13,8 @@ TTL rules (from ANNOUNCEMENT_TTL_DAYS in utilities/orchestrator/config.py):
   regulatory_catalyst → 90 days from published_at
   substantive_news    → 90 days from published_at
   administrative      → 14 days from published_at
-  unclassified / None → no expiry (expires_at not set)
+  unclassified / None → no expiry by default; use --expire-legacy to apply
+                        a fallback TTL (default 90 days from published_at)
 
 Run once from your local machine (requires GCP credentials):
 
@@ -21,6 +22,8 @@ Run once from your local machine (requires GCP credentials):
 
 Use --dry-run to print what would be updated without writing anything.
 Use --limit N to process only N documents (useful for testing).
+Use --expire-legacy to also expire unclassified/legacy documents.
+Use --legacy-ttl-days N to override the fallback TTL (default 90).
 """
 
 import argparse
@@ -50,7 +53,7 @@ TTL_BY_TYPE = {
     "substantive_news":    90,
     "administrative":      14,
 }
-DEFAULT_TTL = None  # for unclassified / missing article_type
+DEFAULT_LEGACY_TTL = 90  # used when --expire-legacy is set
 
 
 def _parse_published_at(value) -> datetime | None:
@@ -76,7 +79,8 @@ def _parse_published_at(value) -> datetime | None:
         return None
 
 
-def backfill(dry_run: bool, limit: int | None) -> None:
+def backfill(dry_run: bool, limit: int | None,
+             expire_legacy: bool, legacy_ttl_days: int) -> None:
     db = firestore.Client()
 
     print("Scanning announcements collection...")
@@ -86,11 +90,10 @@ def backfill(dry_run: bool, limit: int | None) -> None:
 
     total = len(docs)
     counts = {
-        "skipped_has_expires":   0,
-        "skipped_no_expiry":     0,
-        "skipped_no_published":  0,
-        "updated":               0,
-        "would_update":          0,
+        "skipped_has_expires": 0,
+        "skipped_no_expiry":   0,
+        "updated":             0,
+        "would_update":        0,
     }
     type_counts: dict[str, int] = {}
 
@@ -105,17 +108,22 @@ def backfill(dry_run: bool, limit: int | None) -> None:
             continue
 
         article_type = data.get("article_type") or "unclassified"
-        ttl_days = TTL_BY_TYPE.get(article_type, DEFAULT_TTL)
+        ttl_days = TTL_BY_TYPE.get(article_type)
 
-        # No expiry for this type — leave document as-is
         if ttl_days is None:
-            counts["skipped_no_expiry"] += 1
-            continue
+            if article_type == "pdmr_transaction":
+                # Always retain pdmr_transaction base records
+                counts["skipped_no_expiry"] += 1
+                continue
+            # unclassified / unknown type
+            if not expire_legacy:
+                counts["skipped_no_expiry"] += 1
+                continue
+            ttl_days = legacy_ttl_days
 
         # Anchor on published_at; fall back to now if missing/unparseable
         published_at = _parse_published_at(data.get("published_at"))
         if published_at is None:
-            # Can't anchor on published_at — use now as a safe fallback
             anchor = now
             anchor_note = "now (published_at missing)"
         else:
@@ -139,14 +147,14 @@ def backfill(dry_run: bool, limit: int | None) -> None:
 
     print(f"\n{'DRY RUN ' if dry_run else ''}Results ({total} documents scanned):")
     print(f"  Already had expires_at:  {counts['skipped_has_expires']}")
-    print(f"  No expiry for type:      {counts['skipped_no_expiry']}")
-    action = "would update" if dry_run else "updated"
-    print(f"  {action.capitalize():24s} {counts['would_update'] if dry_run else counts['updated']}")
+    print(f"  No expiry (retained):    {counts['skipped_no_expiry']}")
+    action = "Would update" if dry_run else "Updated"
+    print(f"  {action:24s} {counts['would_update'] if dry_run else counts['updated']}")
 
     if type_counts:
         print("\n  Breakdown by article_type:")
         for atype, n in sorted(type_counts.items()):
-            ttl = TTL_BY_TYPE.get(atype, DEFAULT_TTL)
+            ttl = TTL_BY_TYPE.get(atype) or (legacy_ttl_days if expire_legacy else None)
             print(f"    {atype:25s}  TTL={ttl} days  count={n}")
 
     if dry_run:
@@ -168,14 +176,35 @@ if __name__ == "__main__":
         default=None,
         help="Process only the first N documents (for testing).",
     )
+    parser.add_argument(
+        "--expire-legacy",
+        action="store_true",
+        help="Also set expires_at on unclassified/legacy documents.",
+    )
+    parser.add_argument(
+        "--legacy-ttl-days",
+        type=int,
+        default=DEFAULT_LEGACY_TTL,
+        help=f"TTL in days for legacy documents when --expire-legacy is set "
+             f"(default: {DEFAULT_LEGACY_TTL}).",
+    )
     args = parser.parse_args()
 
     mode = "DRY RUN" if args.dry_run else "LIVE"
     print(f"Backfilling announcements TTL [{mode}]")
     print(f"  TTL rules: administrative=14d, regulatory_catalyst/substantive_news=90d, "
-          f"pdmr_transaction/unclassified=no expiry")
+          f"pdmr_transaction=no expiry")
+    if args.expire_legacy:
+        print(f"  Legacy/unclassified: {args.legacy_ttl_days}d (--expire-legacy set)")
+    else:
+        print(f"  Legacy/unclassified: no expiry (pass --expire-legacy to include)")
     if args.limit:
         print(f"  Limit: {args.limit} documents")
     print()
 
-    backfill(dry_run=args.dry_run, limit=args.limit)
+    backfill(
+        dry_run=args.dry_run,
+        limit=args.limit,
+        expire_legacy=args.expire_legacy,
+        legacy_ttl_days=args.legacy_ttl_days,
+    )
