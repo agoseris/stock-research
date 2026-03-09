@@ -179,24 +179,6 @@ LAYER2_TOOLS = [
         },
     },
     {
-        "name": "get_company_ch_filings",
-        "description": (
-            "Retrieve recent Companies House filings for the company from Firestore. "
-            "Provides director tenure context."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "ticker": {"type": "string"},
-                "days_lookback": {
-                    "type": "integer",
-                    "description": "Days lookback. Default 365.",
-                },
-            },
-            "required": ["ticker"],
-        },
-    },
-    {
         "name": "get_director_companies_house_profile",
         "description": (
             "Retrieve Companies House profile for the director. "
@@ -385,13 +367,6 @@ def _make_layer2_executor():
                 ticker=tool_input["ticker"],
                 days_lookback=tool_input.get("days_lookback", 90),
                 exclude_id=tool_input.get("exclude_id"),
-            )
-
-        elif tool_name == "get_company_ch_filings":
-            fn = _get_utility("get_company_ch_filings", "get_company_ch_filings")
-            return fn(
-                ticker=tool_input["ticker"],
-                days_lookback=tool_input.get("days_lookback", 365),
             )
 
         elif tool_name == "get_director_companies_house_profile":
@@ -759,8 +734,6 @@ AVAILABLE TOOLS:
   prior transactions at this company
 - get_company_insider_activity: retrieve all recent insider \
   transactions at this company
-- get_company_ch_filings: retrieve Companies House filings \
-  for this company
 - get_director_companies_house_profile: retrieve director's \
   CH profile and appointments (conditional — see below)
 
@@ -799,13 +772,7 @@ Call get_company_insider_activity with:
 Note cluster_detected and net_sentiment.
 A cluster (2+ directors buying within 30 days) is a meaningful signal amplifier.
 
-Step 4 — Retrieve Companies House company filings
-Call get_company_ch_filings with:
-  ticker={ticker}, days_lookback=365
-
-Note board stability and any recent director changes.
-
-Step 5 — CONDITIONAL: Credibility research
+Step 4 — CONDITIONAL: Credibility research
 Evaluate this condition:
 
 IF ANY of these are true:
@@ -824,7 +791,7 @@ ELSE:
   Skip this tool call. credibility_research_triggered = false.
   Note: "Existing material holding provides transaction context."
 
-Step 6 — Assess signal strength
+Step 5 — Assess signal strength
 Score 1-10 starting from baseline 5:
 
 Positive: +2 first_entry with material consideration; +2 position_increase > 20%;
@@ -832,9 +799,9 @@ Positive: +2 first_entry with material consideration; +2 position_increase > 20%
   +1 long tenure (if credibility research triggered)
 
 Negative: -2 position_decrease or complete_exit; -1 token consideration;
-  -1 reporting_lag_days > 30; -1 disqualified; -1 board instability concurrent
+  -1 reporting_lag_days > 30; -1 disqualified
 
-Step 7 — Produce structured output
+Step 6 — Produce structured output
 Respond ONLY with the following JSON structure.
 No preamble. No explanation outside the JSON.
 
@@ -864,13 +831,6 @@ No preamble. No explanation outside the JSON.
     "cluster_detected": false,
     "cluster_summary": "",
     "corroboration_strength": ""
-  }},
-
-  "board_context": {{
-    "board_stability": "",
-    "recent_appointments": 0,
-    "recent_resignations": 0,
-    "context_note": ""
   }},
 
   "credibility_research": {{

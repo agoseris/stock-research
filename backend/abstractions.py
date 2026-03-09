@@ -13,12 +13,6 @@ class Announcement:
     published_at: datetime
     source_url: str
     source_name: str
-    # Confidence that the Companies House data in this announcement relates
-    # to the correct corporate entity. Set by CompaniesHouseProvider when
-    # the CH number was matched by name search rather than exact lookup.
-    # None = source is not Companies House (field not applicable).
-    # 1.0 = exact name match. Lower values indicate fuzzy match.
-    companies_house_confidence: Optional[float] = None
 
 
 class AnnouncementProviderBase(ABC):
@@ -169,11 +163,6 @@ class UniverseCompany:
     last_price_date: Optional[date] = None
     fifty_two_week_high: Optional[float] = None
     fifty_two_week_low: Optional[float] = None
-    # Companies House registration number and name-match confidence.
-    # Populated during universe import by searching the CH API by name.
-    # Confidence 1.0 = exact match; lower = fuzzy; None = no match found.
-    companies_house_number: Optional[str] = None
-    companies_house_confidence: Optional[float] = None
     not_of_interest: bool = False
 
     # Signal state (system-managed)

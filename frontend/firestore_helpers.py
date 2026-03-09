@@ -241,9 +241,8 @@ def get_universe_stats(_db) -> dict:
     total = len(companies)
     aim = sum(1 for c in companies if c.get("listing_exchange") == "AIM")
     ftse = sum(1 for c in companies if c.get("listing_exchange") == "LSE_MAIN")
-    ch_matched = sum(1 for c in companies if c.get("companies_house_number"))
     muted = sum(1 for c in companies if c.get("not_of_interest", False))
-    return {"total": total, "aim": aim, "ftse": ftse, "ch_matched": ch_matched, "muted": muted}
+    return {"total": total, "aim": aim, "ftse": ftse, "muted": muted}
 
 
 def mark_not_of_interest(db, ticker: str, value: bool):

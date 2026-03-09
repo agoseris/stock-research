@@ -46,7 +46,6 @@ from utilities.orchestrator.simple_lens import run_simple_lens
 
 from abstractions import Announcement, UniverseCompany
 from google.cloud import firestore
-from import_universe_csv import _lookup_ch_number
 from google.cloud.firestore_v1.base_query import FieldFilter
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
@@ -389,11 +388,6 @@ REASON: [one sentence]"""
         print(f"  [{ticker}] {company_name}  not_of_interest={not_of_interest}")
 
         try:
-            api_key = os.environ.get("COMPANIES_HOUSE_KEY", "")
-            ch_number, ch_confidence = None, 0.0
-            if api_key:
-                ch_number, ch_confidence = _lookup_ch_number(company_name, api_key)
-
             now = datetime.now(timezone.utc)
             company = UniverseCompany(
                 ticker_lse=ticker,
@@ -406,8 +400,6 @@ REASON: [one sentence]"""
                 universe_added_date=now.date(),
                 last_refreshed=now,
                 market_cap_gbp=market_cap_gbp,
-                companies_house_number=ch_number,
-                companies_house_confidence=ch_confidence if ch_number else None,
                 not_of_interest=not_of_interest,
             )
             self.universe_storage.save_company(company)
@@ -419,8 +411,8 @@ REASON: [one sentence]"""
                     {"dismissed": True, "dismissed_at": now.isoformat()}
                 )
 
-            self._complete_job(job_id, note=f"admitted: CH={'matched' if ch_number else 'none'}")
-            print(f"  [{ticker}] Admitted. CH: {ch_number or 'none'} ({ch_confidence:.2f})")
+            self._complete_job(job_id, note="admitted")
+            print(f"  [{ticker}] Admitted.")
 
         except Exception as e:
             print(f"  [{ticker}] universe_admit failed: {e}")
@@ -492,17 +484,12 @@ REASON: [one sentence]"""
             if update_companies:
                 print(f"  Updated {len(update_companies)} companies.")
 
-            # 4. New — CH lookup + save_company()
-            api_key = os.environ.get("COMPANIES_HOUSE_KEY", "")
+            # 4. New — save_company()
             for i, comp in enumerate(new_companies, 1):
                 ticker = (comp.get("ticker") or "").strip().upper()
                 company_name = comp.get("company_name", "")
                 if not ticker or not company_name:
                     continue
-                ch_number, ch_confidence = None, 0.0
-                if api_key:
-                    ch_number, ch_confidence = _lookup_ch_number(company_name, api_key)
-                    time.sleep(0.6)  # CH rate limit
                 listing_exchange = comp.get("listing_exchange", "AIM")
                 company = UniverseCompany(
                     ticker_lse=ticker,
@@ -515,8 +502,6 @@ REASON: [one sentence]"""
                     universe_added_date=now.date(),
                     last_refreshed=now,
                     market_cap_gbp=comp.get("market_cap_gbp"),
-                    companies_house_number=ch_number,
-                    companies_house_confidence=ch_confidence if ch_number else None,
                 )
                 self.universe_storage.save_company(company)
                 self._universe_tickers.add(ticker)

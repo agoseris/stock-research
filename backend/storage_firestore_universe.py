@@ -87,8 +87,6 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             ),
             "fifty_two_week_high": company.fifty_two_week_high,
             "fifty_two_week_low": company.fifty_two_week_low,
-            "companies_house_number": company.companies_house_number,
-            "companies_house_confidence": company.companies_house_confidence,
             "not_of_interest": company.not_of_interest,
             # Signal / position state
             "signal_state": company.signal_state,
@@ -151,8 +149,6 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
             last_price_date=_parse_date(data.get("last_price_date")),
             fifty_two_week_high=data.get("fifty_two_week_high"),
             fifty_two_week_low=data.get("fifty_two_week_low"),
-            companies_house_number=data.get("companies_house_number"),
-            companies_house_confidence=data.get("companies_house_confidence"),
             not_of_interest=data.get("not_of_interest", False),
             signal_state=data.get("signal_state"),
             signal_state_since=_parse_optional_datetime(data.get("signal_state_since")),

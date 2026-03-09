@@ -15,7 +15,7 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-VERSION = "2.48"
+VERSION = "2.49"
 
 # ── Page config ─────────────────────────────────────────────────────────────────
 
@@ -256,12 +256,11 @@ with tab_universe:
     # Stats bar
     try:
         stats = get_universe_stats(db)
-        c1, c2, c3, c4, c5 = st.columns(5)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total", stats["total"])
         c2.metric("AIM", stats["aim"])
         c3.metric("FTSE Main", stats["ftse"])
-        c4.metric("CH Matched", stats["ch_matched"])
-        c5.metric("Muted", stats["muted"])
+        c4.metric("Muted", stats["muted"])
     except Exception as e:
         st.caption(f"Could not load universe stats: {e}")
 
@@ -326,8 +325,8 @@ with tab_universe:
 
     if page_companies:
         # Column headers
-        hdr = st.columns([1.2, 4, 1.2, 1.5, 1.5, 1, 1.5, 1.5])
-        for col, lbl in zip(hdr, ["Ticker", "Company", "Exchange", "Mkt Cap (£M)", "CH Conf", "Muted", "Added", "Action"]):
+        hdr = st.columns([1.2, 4, 1.2, 1.5, 1, 1.5, 1.5])
+        for col, lbl in zip(hdr, ["Ticker", "Company", "Exchange", "Mkt Cap (£M)", "Muted", "Added", "Action"]):
             col.caption(f"**{lbl}**")
         st.markdown('<hr style="margin:0.2rem 0 0.5rem 0;border-color:#1a2535;"/>', unsafe_allow_html=True)
 
@@ -336,13 +335,11 @@ with tab_universe:
             is_muted = c.get("not_of_interest", False)
             mcap     = c.get("market_cap_gbp")
             mcap_str = f"{mcap / 1_000_000:.0f}" if mcap else "—"
-            conf     = c.get("companies_house_confidence")
-            conf_str = "Exact" if conf and conf >= 1.0 else (f"{conf:.2f}" if conf else "—")
             added    = c.get("universe_added_date", "")
             added_str = str(added)[:10] if added else "—"
 
-            (c_tick, c_comp, c_exch, c_mcap_col, c_ch, c_mut, c_added, c_action) = st.columns(
-                [1.2, 4, 1.2, 1.5, 1.5, 1, 1.5, 1.5]
+            (c_tick, c_comp, c_exch, c_mcap_col, c_mut, c_added, c_action) = st.columns(
+                [1.2, 4, 1.2, 1.5, 1, 1.5, 1.5]
             )
             c_tick.markdown(
                 f'<span style="font-size:0.8rem;font-family:\'IBM Plex Mono\',monospace;'
@@ -352,7 +349,6 @@ with tab_universe:
             c_comp.caption(c.get("company_name", "—")[:42])
             c_exch.caption(c.get("listing_exchange", "—"))
             c_mcap_col.caption(mcap_str)
-            c_ch.caption(conf_str)
             c_mut.caption("●" if is_muted else "")
             c_added.caption(added_str)
 
@@ -377,7 +373,7 @@ with tab_universe:
                 exch_code = "AIM" if ma_exchange == "AIM" else "LSE_MAIN"
                 mcap_gbp  = ma_mcap * 1_000_000 if ma_mcap > 0 else None
                 submit_universe_admit_job(db, ma_ticker, ma_name, mcap_gbp, exch_code)
-                st.success("Submitted — CH lookup running on VM. Results appear in ~30 seconds.")
+                st.success("Submitted — company will appear in universe within ~30 seconds.")
             else:
                 st.warning("Ticker and Company Name are required.")
 

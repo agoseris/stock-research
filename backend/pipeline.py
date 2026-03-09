@@ -3,7 +3,6 @@ from telegram_notifier import TelegramNotifier
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from abstractions import Announcement, StorageProviderBase, UniverseStorageProviderBase
-from companies_house_connector import CompaniesHouseProvider
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
 from storage_firestore import FirestoreProvider
@@ -37,9 +36,9 @@ class AnalysisPipeline:
         storage: StorageProviderBase = None,
         universe_storage: Optional[UniverseStorageProviderBase] = None,
     ):
-        self.providers = [
-            CompaniesHouseProvider(universe_storage=universe_storage),
-        ]
+        # CH news provider retired — no autonomous ingest providers active.
+        # Pipeline run still executes decay checks and state transitions.
+        self.providers = []
         self.lenses = [
             RegulatoryCatalystLens(),
         ]

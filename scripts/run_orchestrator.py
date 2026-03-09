@@ -143,7 +143,6 @@ def _fetch_company_profile(db, ticker: str) -> dict:
         "index_membership": "AIM" if listing == "AIM" else "MAIN_MARKET",
         "listing_exchange": listing,
         "tier": data.get("tier"),
-        "companies_house_number": data.get("companies_house_number"),
     }
 
 
