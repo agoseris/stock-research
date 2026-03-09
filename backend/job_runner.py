@@ -42,6 +42,7 @@ from utilities.orchestrator.classification import (
     classify_article,
     get_open_market_transactions,
 )
+from utilities.orchestrator.persistence import update_agentic_status
 from utilities.orchestrator.simple_lens import run_simple_lens
 
 from abstractions import Announcement, UniverseCompany
@@ -102,6 +103,30 @@ class JobRunner:
             print(f"[{_ts()}] Warning: could not load universe ({e}). "
                   "All jobs will be routed to discovery queue.")
             return set()
+
+    def _get_director_lens_config(self) -> dict:
+        """
+        Read materiality gate config from app_config/director_lens_config.
+        Returns defaults if the document does not exist.
+
+        Firestore fields:
+          skip_agentic_on_ignore (bool, default True):
+            Skip agentic investigation when simple lens recommends Ignore.
+          agentic_min_consideration_gbp (float, default 0):
+            Skip agentic investigation when total consideration is below
+            this floor in GBP. Set to 0 to disable the floor check.
+        """
+        _DEFAULTS = {
+            "skip_agentic_on_ignore": True,
+            "agentic_min_consideration_gbp": 0,
+        }
+        try:
+            doc = self.db.collection("app_config").document("director_lens_config").get()
+            if doc.exists:
+                return {**_DEFAULTS, **doc.to_dict()}
+        except Exception:
+            pass
+        return _DEFAULTS
 
     # ------------------------------------------------------------------
     # Job claim and construction
@@ -271,10 +296,15 @@ REASON: [one sentence]"""
         company = self.universe_storage.get_company(ticker)
         company_profile = _build_company_profile(company)
 
+        cfg = self._get_director_lens_config()
+        skip_on_ignore = cfg.get("skip_agentic_on_ignore", True)
+        min_consideration = cfg.get("agentic_min_consideration_gbp", 0)
+
         for tx in open_market_txs:
             tx_enriched = dict(tx)
             tx_enriched["ticker"] = announcement.ticker
             tx_enriched["company_name"] = announcement.company_name
+            director = tx.get("director_name", "?")
             try:
                 simple_result, _tokens = run_simple_lens(
                     rns_article_id=rns_article_id,
@@ -284,11 +314,24 @@ REASON: [one sentence]"""
                     db=self.db,
                 )
                 rec = simple_result.get("RECOMMENDED_ACTION", "unknown")
-                print(f"  [{ticker}] Simple lens: {rec} "
-                      f"(director: {tx.get('director_name', '?')})")
+                print(f"  [{ticker}] Simple lens: {rec} (director: {director})")
+
+                # Materiality gate — override agentic_status to "skipped" if:
+                #   1. Simple lens recommends Ignore, or
+                #   2. Consideration is below the configured floor
+                consideration = tx.get("total_consideration_gbp") or 0
+                gated_ignore = skip_on_ignore and rec == "Ignore"
+                gated_floor = min_consideration > 0 and consideration < min_consideration
+                if gated_ignore or gated_floor:
+                    reason = "simple_lens_ignore" if gated_ignore else f"below_floor_£{min_consideration:,.0f}"
+                    update_agentic_status(rns_article_id, "skipped", db=self.db)
+                    print(f"  [{ticker}] Agentic skipped ({reason}) — "
+                          f"consideration=£{consideration:,.0f}")
+                else:
+                    print(f"  [{ticker}] Agentic queued — consideration=£{consideration:,.0f}")
+
             except Exception as e:
-                print(f"  [{ticker}] Simple lens failed "
-                      f"for {tx.get('director_name', '?')}: {e}")
+                print(f"  [{ticker}] Simple lens failed for {director}: {e}")
 
         self._complete_job(
             job_id,
