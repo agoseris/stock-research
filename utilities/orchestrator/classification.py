@@ -124,6 +124,27 @@ If article_type is pdmr_transaction, extract ALL transactions present.
 A single filing may contain multiple directors and multiple transaction
 dates — extract each as a separate transaction object.
 
+MIXED-TYPE FILINGS:
+A single filing may contain transactions of different categories (e.g.
+open-market purchases AND share award vestings for the same or different
+directors). Extract EVERY distinct transaction as its own object —
+do not merge or omit transactions because they differ in category.
+
+If a filing announces open-market purchases but also mentions prior
+award vestings or option exercises (e.g. to explain how the resulting
+holding was reached), extract each as a separate transaction object
+with its own date, share count, price, and category.
+
+If vesting or award details are cited purely as background context —
+with no transaction date, no consideration, and no separate RNS
+disclosure — do NOT extract them as transactions. Record them in
+confidence_notes on the relevant purchase transaction instead.
+
+Category priority rule: if the filing headline or opening section
+describes purchases or acquisitions, expect open_market_purchase
+transactions to be present. Do not reclassify them as award or
+vesting transactions on the basis of surrounding context.
+
 For each transaction, extract:
   director_name: Full name as stated
   director_role: Role/position as stated
