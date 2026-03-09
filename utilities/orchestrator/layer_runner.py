@@ -1141,7 +1141,17 @@ def run_layer_agent(
         3: _build_layer3_prompt,
     }
     prompt = prompt_builders[layer](inputs)
-    messages = [{"role": "user", "content": prompt}]
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}}
+    ]}]
+
+    # Mark the last tool definition so the tool schemas are included in the
+    # cached prefix alongside the initial prompt.
+    tools_with_cache = list(tools)
+    if tools_with_cache:
+        last = dict(tools_with_cache[-1])
+        last["cache_control"] = {"type": "ephemeral"}
+        tools_with_cache[-1] = last
 
     total_input = 0
     total_output = 0
@@ -1150,11 +1160,19 @@ def run_layer_agent(
         response = client.messages.create(
             model=model,
             max_tokens=4096,
-            tools=tools,
+            tools=tools_with_cache,
             messages=messages,
         )
         total_input += response.usage.input_tokens
         total_output += response.usage.output_tokens
+        cache_write = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+        cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        logger.info(
+            "layer%d [iter %d] tokens — input:%d output:%d cache_write:%d cache_read:%d",
+            layer, iteration,
+            response.usage.input_tokens, response.usage.output_tokens,
+            cache_write, cache_read,
+        )
 
         block_types = [b.type for b in response.content]
         logger.debug(
@@ -1234,6 +1252,14 @@ def run_layer_agent(
                 )
                 total_input += retry_resp.usage.input_tokens
                 total_output += retry_resp.usage.output_tokens
+                retry_cache_write = getattr(retry_resp.usage, "cache_creation_input_tokens", 0) or 0
+                retry_cache_read = getattr(retry_resp.usage, "cache_read_input_tokens", 0) or 0
+                logger.info(
+                    "layer%d [retry] tokens — input:%d output:%d cache_write:%d cache_read:%d",
+                    layer,
+                    retry_resp.usage.input_tokens, retry_resp.usage.output_tokens,
+                    retry_cache_write, retry_cache_read,
+                )
                 retry_text_blocks = [b for b in retry_resp.content if b.type == "text"]
                 text = retry_text_blocks[0].text if retry_text_blocks else ""
                 if text.strip():

@@ -9,7 +9,10 @@ Model: Claude Sonnet (synthesis_model from config).
 """
 
 import json
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from utilities.orchestrator.config import ORCHESTRATOR_CONFIG
 from utilities.orchestrator.token_tracker import aggregate_token_usage
@@ -306,6 +309,13 @@ def run_synthesis(
             pass
         raise
 
+    synth_cache_write = getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+    synth_cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+    logger.info(
+        "synthesis tokens — input:%d output:%d cache_write:%d cache_read:%d",
+        response.usage.input_tokens, response.usage.output_tokens,
+        synth_cache_write, synth_cache_read,
+    )
     synthesis_tokens = {
         "input": response.usage.input_tokens,
         "output": response.usage.output_tokens,

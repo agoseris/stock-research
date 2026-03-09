@@ -27,7 +27,7 @@ import hashlib
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -539,7 +539,12 @@ REASON: [one sentence]"""
     # ------------------------------------------------------------------
 
     def _complete_job(self, job_id: str, note: Optional[str] = None):
-        update = {"status": "complete", "processed_at": datetime.now(timezone.utc).isoformat()}
+        now = datetime.now(timezone.utc)
+        update = {
+            "status": "complete",
+            "processed_at": now.isoformat(),
+            "expires_at": now + timedelta(days=7),
+        }
         if note:
             update["note"] = note
         self.db.collection("pending_jobs").document(job_id).update(update)
@@ -550,6 +555,7 @@ REASON: [one sentence]"""
                 "status": "failed",
                 "error": error,
                 "processed_at": datetime.now(timezone.utc).isoformat(),
+                "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
             })
         except Exception as e:
             print(f"  Could not mark job {job_id} as failed: {e}")
