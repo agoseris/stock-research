@@ -332,7 +332,7 @@ def call_classification(
     try:
         response = client.messages.create(
             model=model,
-            max_tokens=2000,
+            max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
     except Exception as e:

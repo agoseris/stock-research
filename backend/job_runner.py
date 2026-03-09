@@ -597,12 +597,17 @@ REASON: [one sentence]"""
                     article_type = classification.get("article_type", "unclassified")
                     print(f"  [{ticker}] Classification: {article_type}")
                 except Exception as e:
-                    print(f"  [{ticker}] Classification failed: {e} — falling back to regulatory lens.")
-                    article_type = "unclassified"
-                    classification = {}
+                    print(f"  [{ticker}] Classification exception: {e} — skipping lens analysis.")
+                    self._complete_job(job_id, note="classification_failed")
+                    return
 
                 if article_type == "pdmr_transaction":
                     self._run_pdmr_flow(job_id, announcement, classification, job, rns_article_id)
+                    return
+
+                if classification.get("extraction_status") == "failed":
+                    self._complete_job(job_id, note="classification_failed")
+                    print(f"  [{ticker}] Classification failed — skipping lens analysis.")
                     return
 
                 # Non-PDMR: run regulatory catalyst lens
