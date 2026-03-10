@@ -14,9 +14,8 @@ html, body, [class*="css"] {
 
 /* Hide Streamlit chrome */
 #MainMenu, footer, header { visibility: hidden; }
-/* Sidebar is navigation — prevent it from being collapsed */
-[data-testid="stSidebarCollapseButton"] { display: none !important; }
-.block-container { padding: 2rem 2.5rem 2rem 2.5rem; max-width: 1400px; }
+/* Extra top padding compensates for the fixed tab bar */
+.block-container { padding: 4.5rem 2.5rem 2rem 2.5rem; max-width: 1400px; }
 
 /* Terminal header */
 .terminal-header {
@@ -307,18 +306,20 @@ html, body, [class*="css"] {
     background: #1a080844;
 }
 
-/* Sticky tab bar — multiple selectors to cover Streamlit version differences */
+/* Fixed tab bar — position:fixed bypasses parent overflow:hidden */
 [data-testid="stTabBar"],
 [data-baseweb="tab-list"],
 .stTabs [role="tablist"],
 div[class*="stTabBar"] {
-    position: sticky !important;
+    position: fixed !important;
     top: 0 !important;
-    z-index: 999 !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 9999 !important;
     background-color: #0a0e14 !important;
-    padding-top: 0.4rem;
-    padding-bottom: 0.2rem;
-    border-bottom: 1px solid #131e2e;
+    padding: 0.4rem 2.5rem 0.2rem 2.5rem !important;
+    border-bottom: 1px solid #131e2e !important;
+    margin: 0 !important;
 }
 
 /* Performance tab */
