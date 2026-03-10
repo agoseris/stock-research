@@ -491,7 +491,7 @@ def _cleanup_dismissed(db, existing_perf: dict, active_ids: set, dry_run: bool, 
 # Entry point
 # ---------------------------------------------------------------------------
 
-def run(dry_run: bool, ticker_filter: str | None) -> None:
+def run(dry_run: bool, ticker_filter: str | None, debug: bool = False) -> None:
     db = firestore.Client()
     today = date.today()
 
@@ -518,6 +518,23 @@ def run(dry_run: bool, ticker_filter: str | None) -> None:
     sig_docs = list(db.collection(COLLECTION_SIGNALS).stream())
     print(f"  {len(sig_docs)} total documents")
 
+    if debug:
+        from collections import Counter
+        rec_counts: Counter = Counter()
+        dismissed_count = 0
+        for doc in sig_docs:
+            d = doc.to_dict() or {}
+            if (d.get("investor_action") or "") == "dismissed":
+                dismissed_count += 1
+            rec = ((d.get("simple_lens_result") or {}).get("recommendation")
+                   or d.get("recommendation") or "—").lower()
+            sig_type = d.get("signal_type") or "unknown"
+            rec_counts[f"{sig_type} / {rec}"] += 1
+        print(f"  dismissed: {dismissed_count}")
+        print(f"  recommendation breakdown:")
+        for k, v in sorted(rec_counts.items()):
+            print(f"    {k}: {v}")
+
     for doc in sig_docs:
         data = doc.to_dict() or {}
         ticker = (data.get("ticker") or "").upper()
@@ -536,6 +553,21 @@ def run(dry_run: bool, ticker_filter: str | None) -> None:
     print(f"\nScanning {COLLECTION_SIGNAL_RESULTS}...")
     sr_docs = list(db.collection(COLLECTION_SIGNAL_RESULTS).stream())
     print(f"  {len(sr_docs)} total documents")
+
+    if debug:
+        from collections import Counter
+        sr_strength_counts: Counter = Counter()
+        sr_dismissed = 0
+        for doc in sr_docs:
+            d = doc.to_dict() or {}
+            if d.get("dismissed", False):
+                sr_dismissed += 1
+            strength = (d.get("signal_strength") or "—").lower()
+            sr_strength_counts[strength] += 1
+        print(f"  dismissed: {sr_dismissed}")
+        print(f"  signal_strength breakdown:")
+        for k, v in sorted(sr_strength_counts.items()):
+            print(f"    {k}: {v}")
 
     for doc in sr_docs:
         data = doc.to_dict() or {}
@@ -582,5 +614,10 @@ if __name__ == "__main__":
         default=None,
         help="Process only signals for this ticker (useful for testing).",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print signal_strength / recommendation breakdown to diagnose eligibility.",
+    )
     args = parser.parse_args()
-    run(dry_run=args.dry_run, ticker_filter=args.ticker)
+    run(dry_run=args.dry_run, ticker_filter=args.ticker, debug=args.debug)
