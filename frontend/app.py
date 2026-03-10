@@ -15,7 +15,7 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-VERSION = "2.52"
+VERSION = "2.53"
 
 # ── Page config ─────────────────────────────────────────────────────────────────
 
@@ -60,6 +60,7 @@ from parse_helpers import _parse_universe_csv, _compute_universe_delta
 from ui_helpers import parse_analysis, get_field, recommend_add_badge, format_timestamp
 from tab_signals import render_signals_tab
 from tab_ingest import render_ingest_tab
+from tab_performance import render_performance_tab
 
 # ── Header ───────────────────────────────────────────────────────────────────────
 
@@ -147,11 +148,12 @@ st.markdown(f"""
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────────
 
-tab_signals, tab_discovery, tab_universe, tab_ingest, tab_config = st.tabs([
+tab_signals, tab_discovery, tab_universe, tab_ingest, tab_performance, tab_config = st.tabs([
     f"Signals  [{len(signals)}]",
     f"Discovery  [{len(discoveries)}]",
     "Universe",
     "Ingest",
+    "Performance",
     "Config",
 ])
 
@@ -521,6 +523,11 @@ with tab_universe:
 
 with tab_ingest:
     render_ingest_tab(db)
+
+# ── Performance tab ──────────────────────────────────────────────────────────────
+
+with tab_performance:
+    render_performance_tab(db)
 
 # ── Config tab ───────────────────────────────────────────────────────────────────
 

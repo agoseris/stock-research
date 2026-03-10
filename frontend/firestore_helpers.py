@@ -368,3 +368,18 @@ def submit_job(db, row_dict, body):
         "error": None,
     }
     db.collection("pending_jobs").add(job)
+
+
+# ── Signal performance ─────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_signal_performance(_db) -> list[dict]:
+    """
+    Fetch all signal_performance documents.
+    Returns list of data dicts (doc_id merged in as _id).
+    """
+    try:
+        docs = _db.collection("signal_performance").stream()
+        return [{**doc.to_dict(), "_id": doc.id} for doc in docs]
+    except Exception:
+        return []

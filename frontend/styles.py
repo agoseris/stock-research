@@ -305,6 +305,33 @@ html, body, [class*="css"] {
     background: #1a080844;
 }
 
+/* Performance tab */
+.perf-section-heading {
+    font-size: 0.7rem;
+    font-family: 'IBM Plex Mono', monospace;
+    color: #c8a84a;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin: 1.2rem 0 0.5rem;
+}
+.perf-metric-positive { color: #4af798; }
+.perf-metric-negative { color: #f76a6a; }
+.perf-metric-neutral  { color: #8aabcc; }
+.perf-accuracy-row {
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid #131e2e;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.72rem;
+}
+.perf-lens-label {
+    width: 180px;
+    color: #5a7a9a;
+    letter-spacing: 0.05em;
+}
+
 /* Expander */
 .streamlit-expanderHeader {
     font-family: 'IBM Plex Mono', monospace;
