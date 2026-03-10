@@ -226,7 +226,8 @@ def _eligible_signal(data: dict) -> bool:
     if (data.get("investor_action") or "") == "dismissed":
         return False
     rec = (
-        (data.get("simple_lens_result") or {}).get("recommendation")
+        (data.get("simple_lens_result") or {}).get("recommendation")  # TR-1
+        or data.get("simple_recommended_action")                        # director buying
         or data.get("recommendation")
         or ""
     ).lower()
@@ -428,7 +429,9 @@ def _process_signal(
         lens_type  = data.get("signal_type") or "unknown"
         simple     = data.get("simple_lens_result") or {}
         strength   = simple.get("signal_strength") or data.get("signal_strength") or ""
-        rec        = simple.get("recommendation") or ""
+        rec        = (simple.get("recommendation")              # TR-1
+                      or data.get("simple_recommended_action")  # director buying
+                      or "")
     else:
         lens_type  = "regulatory_catalyst"
         strength   = data.get("signal_strength") or ""
