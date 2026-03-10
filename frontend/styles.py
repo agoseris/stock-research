@@ -305,6 +305,17 @@ html, body, [class*="css"] {
     background: #1a080844;
 }
 
+/* Sticky tab bar */
+[data-testid="stTabBar"] {
+    position: sticky;
+    top: 0;
+    z-index: 999;
+    background-color: #0a0e14;
+    padding-top: 0.4rem;
+    padding-bottom: 0.2rem;
+    border-bottom: 1px solid #131e2e;
+}
+
 /* Performance tab */
 .perf-section-heading {
     font-size: 0.7rem;

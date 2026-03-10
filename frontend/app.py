@@ -15,7 +15,7 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-VERSION = "2.54"
+VERSION = "2.55"
 
 # ── Page config ─────────────────────────────────────────────────────────────────
 
@@ -66,9 +66,9 @@ from tab_performance import render_performance_tab
 
 db = get_db()
 
-st.markdown(f'<div class="terminal-header">LSE Small-Cap Research System · Regulatory Catalyst Lens · v{VERSION}</div>', unsafe_allow_html=True)
-st.markdown('<div class="page-title">Research Terminal</div>', unsafe_allow_html=True)
-st.markdown('<div class="page-subtitle">Signals surfaced by autonomous pipeline · Dismiss to archive · Universe expands only through explicit decision</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="terminal-header">LSE Small-Cap Research System · Director Buying · TR-1 Accumulation · Regulatory Catalyst · v{VERSION}</div>', unsafe_allow_html=True)
+st.markdown('<div class="page-title">Catalyst Monitor</div>', unsafe_allow_html=True)
+st.markdown('<div class="page-subtitle">Three lenses · Informed actors surfaced by autonomous pipeline · Universe expands only through explicit decision</div>', unsafe_allow_html=True)
 
 # ── Load data ────────────────────────────────────────────────────────────────────
 
@@ -105,7 +105,7 @@ for _t in sorted(_priority_tickers - _loaded_tickers):
     if _fresh:
         signals.append(_fresh[0])
 
-# Count actionable items
+# Count actionable items — across all lenses
 action_count = sum(
     1 for _, r in signals
     if get_field(r.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower() == "yes"
@@ -114,6 +114,19 @@ monitor_count = sum(
     1 for _, r in signals
     if get_field(r.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower() == "monitor"
 )
+
+# Director / TR-1 signals: recommendation from simple_lens_result or simple_recommended_action
+for _, r in (director_signals or []):
+    _simple_rec = (
+        (r.get("simple_lens_result") or {}).get("recommendation")  # TR-1
+        or r.get("simple_recommended_action")                        # director buying
+        or ""
+    ).lower()
+    if _simple_rec.startswith("investigate"):
+        action_count += 1
+    elif _simple_rec.startswith("monitor"):
+        monitor_count += 1
+
 discovery_count = sum(
     1 for _, r in discoveries
     if get_field(r.get("discovery_assessment", ""), "RECOMMEND_ADD").lower() in ("yes", "maybe")
@@ -121,10 +134,11 @@ discovery_count = sum(
 
 # ── Stat bar ─────────────────────────────────────────────────────────────────────
 
+_dir_signal_count = len(director_signals or [])
 st.markdown(f"""
 <div class="stat-bar">
     <div class="stat-item">
-        <span class="stat-label">Action Required</span>
+        <span class="stat-label">Investigate</span>
         <span class="stat-value alert">{action_count}</span>
     </div>
     <div class="stat-item">
@@ -132,12 +146,12 @@ st.markdown(f"""
         <span class="stat-value">{monitor_count}</span>
     </div>
     <div class="stat-item">
-        <span class="stat-label">Total Signals</span>
+        <span class="stat-label">Catalyst Signals</span>
         <span class="stat-value">{len(signals)}</span>
     </div>
     <div class="stat-item">
-        <span class="stat-label">Universe Candidates</span>
-        <span class="stat-value positive">{discovery_count}</span>
+        <span class="stat-label">Director / TR-1</span>
+        <span class="stat-value">{_dir_signal_count}</span>
     </div>
     <div class="stat-item">
         <span class="stat-label">Discovery Queue</span>
