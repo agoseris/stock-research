@@ -1,6 +1,9 @@
 google-cloud-firestore
+google-genai
 openpyxl
 python-dotenv
 playwright
 yfinance
 pandas
+anthropic
+rapidfuzz
