@@ -14,6 +14,8 @@ html, body, [class*="css"] {
 
 /* Hide Streamlit chrome */
 #MainMenu, footer, header { visibility: hidden; }
+/* Sidebar is navigation — prevent it from being collapsed */
+[data-testid="stSidebarCollapseButton"] { display: none !important; }
 .block-container { padding: 2rem 2.5rem 2rem 2.5rem; max-width: 1400px; }
 
 /* Terminal header */

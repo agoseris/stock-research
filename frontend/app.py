@@ -15,7 +15,7 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-VERSION = "2.57"
+VERSION = "2.58"
 
 # Set to False to revert to the original st.tabs() layout
 _USE_SIDEBAR_NAV = True
