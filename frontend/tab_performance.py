@@ -75,6 +75,12 @@ def _snap_pct(doc: dict, key: str, field: str = "pct_vs_baseline") -> float | No
     return float(val) if val is not None else None
 
 
+def _snap_price(doc: dict, key: str) -> float | None:
+    snap = (doc.get("snapshots") or {}).get(key) or {}
+    val = snap.get("price_p")
+    return float(val) if val is not None else None
+
+
 def _fmt_pct(val: float | None, show_sign: bool = True) -> str:
     if val is None:
         return "—"
@@ -231,9 +237,10 @@ def _render_price_position(docs: list[dict]) -> None:
         unsafe_allow_html=True,
     )
     st.caption(
-        "Pre-signal columns show price momentum leading into the signal. "
-        "Post-signal columns show the subsequent reaction. "
-        "A signal arriving 'just before' the move shows flat pre / positive post."
+        "All % values are relative to the signal-date price.  "
+        "Pre-signal positive = stock was higher then (fell into the signal).  "
+        "Post-signal positive = stock rose after signal.  "
+        "A timely signal shows flat/negative pre with positive post."
     )
 
     rows = []
@@ -281,7 +288,7 @@ def _render_price_position(docs: list[dict]) -> None:
 # Signal detail table
 # ---------------------------------------------------------------------------
 
-def _render_detail_table(docs: list[dict], lens_filter: str, min_window: str) -> None:
+def _render_detail_table(docs: list[dict], lens_filter: str, rec_filter: str, min_window: str) -> None:
     st.markdown(
         '<div class="perf-section-heading">Signal Detail</div>',
         unsafe_allow_html=True,
@@ -302,6 +309,10 @@ def _render_detail_table(docs: list[dict], lens_filter: str, min_window: str) ->
         lt = doc.get("lens_type") or "unknown"
         if lens_filter != "All" and _LENS_LABELS.get(lt, lt) != lens_filter:
             continue
+        if rec_filter != "All":
+            doc_rec = (doc.get("recommendation") or "").split()[0].title()
+            if doc_rec != rec_filter:
+                continue
         if required_key and _snap_pct(doc, required_key) is None:
             continue
 
@@ -311,6 +322,7 @@ def _render_detail_table(docs: list[dict], lens_filter: str, min_window: str) ->
             "Lens":      _lens_label(doc),
             "Date":      _signal_date_str(doc),
             "Rec":       (doc.get("recommendation") or "—").title(),
+            "Price (p)": _snap_price(doc, "baseline"),
             "−30d":      _snap_pct(doc, "pre_30d"),
             "−1w":       _snap_pct(doc, "pre_1w"),
             "+1d":       _snap_pct(doc, "post_1d"),
@@ -338,14 +350,22 @@ def _render_detail_table(docs: list[dict], lens_filter: str, min_window: str) ->
             return "color: #3a4f66"
         return "color: #4af798" if val >= 0 else "color: #f76a6a"
 
+    fmt = {c: lambda v: _fmt_pct(v) for c in pct_cols}
+    fmt["Price (p)"] = lambda v: f"{v:.1f}p" if v is not None else "—"
+
     styled = (
         df.style
-        .format({c: lambda v: _fmt_pct(v) for c in pct_cols}, na_rep="—")
+        .format(fmt, na_rep="—")
         .applymap(_style_pct, subset=pct_cols)
         .set_properties(**{"font-family": "IBM Plex Mono, monospace", "font-size": "0.70rem"})
     )
     st.dataframe(styled, use_container_width=True, hide_index=True)
-    st.caption(f"{len(rows)} signals shown. % values are vs price at signal date. 'idx' = outperformance vs benchmark.")
+    st.caption(
+        f"{len(rows)} signals shown.  "
+        f"Pre-signal % (−30d, −1w): positive = stock was higher then, i.e. fell into the signal.  "
+        f"Post-signal % (+1d…+12m): positive = stock rose after signal.  "
+        f"'idx' columns = outperformance vs benchmark index."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -360,23 +380,37 @@ def render_performance_tab(db) -> None:
         return
 
     # --- Filter bar ---
-    col_l, col_w, col_spacer = st.columns([2, 2, 6])
+    col_l, col_r, col_w, col_spacer = st.columns([2, 2, 2, 4])
     with col_l:
         lens_options = ["All"] + [
             _LENS_LABELS[lt] for lt in _LENS_ORDER
             if any((d.get("lens_type") or "unknown") == lt for d in perf_docs)
         ]
         lens_filter = st.selectbox("Lens", lens_options, key="perf_lens_filter", label_visibility="collapsed")
+    with col_r:
+        # Collect recommendation values present in the data (first word, title-cased)
+        all_recs = sorted({
+            (d.get("recommendation") or "").split()[0].title()
+            for d in perf_docs
+            if (d.get("recommendation") or "").strip()
+        })
+        rec_options = ["All"] + all_recs
+        rec_filter = st.selectbox("Recommendation", rec_options, key="perf_rec_filter", label_visibility="collapsed")
     with col_w:
         min_window = st.selectbox(
             "Min data", ["Any", "+1w", "+1m", "+3m", "+6m"],
             key="perf_window_filter", label_visibility="collapsed"
         )
 
-    # Apply lens filter to summary and position sections too
+    # Apply lens + rec filters to summary and position sections too
     filtered = perf_docs
     if lens_filter != "All":
-        filtered = [d for d in perf_docs if _lens_label(d) == lens_filter]
+        filtered = [d for d in filtered if _lens_label(d) == lens_filter]
+    if rec_filter != "All":
+        filtered = [
+            d for d in filtered
+            if (d.get("recommendation") or "").split()[0].title() == rec_filter
+        ]
 
     # --- Summary metrics ---
     s = _compute_summary(filtered)
@@ -412,4 +446,4 @@ def render_performance_tab(db) -> None:
     st.markdown("---")
 
     # --- Signal detail ---
-    _render_detail_table(perf_docs, lens_filter, min_window)
+    _render_detail_table(perf_docs, lens_filter, rec_filter, min_window)
