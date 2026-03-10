@@ -136,6 +136,23 @@ html, body, [class*="css"] {
 .badge-director-pending { background: #111820; color: #4a6080; border: 1px solid #1a253544; }
 .badge-director-type { background: #150a2a; color: #c09af7; border: 1px solid #a064f744; }
 
+/* TR-1 accumulation lens — card borders */
+.signal-card-compact.tr1-investigate { border-left-color: #4af7c8; }
+.signal-card-compact.tr1-monitor { border-left-color: #f7e14a; }
+.signal-card-compact.tr1-ignore { border-left-color: #1a2535; }
+
+/* TR-1 accumulation lens — badges */
+.badge-tr1-investigate { background: #081f1a; color: #4af7c8; border: 1px solid #4af7c844; }
+.badge-tr1-monitor { background: #1f1a04; color: #f7e14a; border: 1px solid #f7e14a44; }
+.badge-tr1-ignore { background: #111820; color: #3d5166; border: 1px solid #1a253544; }
+.badge-tr1-direction-up { background: #081a10; color: #4af798; border: 1px solid #4af79844; }
+.badge-tr1-direction-down { background: #1a0808; color: #f76a6a; border: 1px solid #f76a6a44; }
+.badge-tr1-direction-unknown { background: #111820; color: #4a6080; border: 1px solid #1a253544; }
+.badge-tr1-notifier-type { background: #0a1520; color: #78b8e8; border: 1px solid #7eb8f744; }
+.badge-tr1-conviction { background: #081f1a; color: #40d0b0; border: 1px solid #40d0b044; }
+.badge-tr1-mechanical { background: #141008; color: #a08040; border: 1px solid #a0804044; }
+.badge-tr1-unclear { background: #111820; color: #4a6080; border: 1px solid #1a253544; }
+
 /* Compact card layout */
 .card-row-top {
     display: flex;
