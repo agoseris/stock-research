@@ -14,7 +14,7 @@ crashes the pipeline. Errors are logged to stdout.
 
 import hashlib
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from dotenv import load_dotenv, find_dotenv
@@ -143,6 +143,7 @@ class FirestoreProvider(StorageProviderBase):
         try:
             payload = dict(result)
             payload["stored_at"] = self._now()
+            payload["expires_at"] = self._now() + timedelta(days=90)
             self.db.collection(self.SIGNAL_RESULTS_COLLECTION).add(payload)
             return True
         except Exception as e:
