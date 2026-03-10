@@ -405,9 +405,11 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
     state_badge = signal_state_badge(sig_state, sig_age)
     pos_badge   = position_state_badge(pos_state)
 
-    mkt       = company.get("market_cap_gbp")
-    mkt_str   = format_market_cap(mkt)
-    mkt_label = f"Market Cap {mkt_str}" if mkt_str != "—" else "—"
+    mkt        = company.get("market_cap_gbp")
+    mkt_str    = format_market_cap(mkt)
+    mkt_label  = f"Market Cap {mkt_str}" if mkt_str != "—" else "—"
+    price_html = format_price_info(signal.get("price_pence"), signal.get("price_change"))
+    market_str = f"{mkt_label} &nbsp;·&nbsp; {price_html}" if price_html != "—" else mkt_label
 
     direction_badge  = _tr1_direction_badge(direction, threshold)
     rec_badge        = _tr1_rec_badge(recommendation)
@@ -437,7 +439,7 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
         f'<div class="card-row-top">'
         f'<span><span class="card-ticker">{ticker}</span>'
         f'<span class="card-company">{co_name}</span>{notifier_html}</span>'
-        f'<span class="card-market">{mkt_label}</span>'
+        f'<span class="card-market">{market_str}</span>'
         f'</div>'
         + (f'<div class="card-headline">{headline_html}</div>' if headline else "")
         + f'<div style="font-size:0.78rem;color:#5a7a8a;margin:0.15rem 0 0.3rem;">'
@@ -829,6 +831,12 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
             unsafe_allow_html=True,
         )
     elif total_shown > 0:
+        st.markdown(
+            '<div style="font-size:0.7rem;font-family:IBM Plex Mono,monospace;color:#f7a84a;'
+            'letter-spacing:0.1em;text-transform:uppercase;margin:1rem 0 0.4rem;">'
+            'Regulatory Catalyst Lens</div>',
+            unsafe_allow_html=True,
+        )
         # ── Card renderer (defined once, called per group) ───────────────────────
         def _render_signal_card(doc_id, result, company):
             analysis    = result.get("llm_analysis", "")

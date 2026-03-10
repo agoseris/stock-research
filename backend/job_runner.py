@@ -384,6 +384,8 @@ REASON: [one sentence]"""
                 "headline": announcement.headline or "",
                 "source_url": announcement.source_url or "",
                 "announcement_published_at": announcement.published_at.isoformat(),
+                "price_pence": job.get("price"),
+                "price_change": job.get("price_change"),
             }, merge=True)
         except Exception as e:
             print(f"  [{ticker}] Could not store TR-1 announcement metadata: {e}")
