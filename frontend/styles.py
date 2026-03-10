@@ -305,12 +305,15 @@ html, body, [class*="css"] {
     background: #1a080844;
 }
 
-/* Sticky tab bar */
-[data-testid="stTabBar"] {
-    position: sticky;
-    top: 0;
-    z-index: 999;
-    background-color: #0a0e14;
+/* Sticky tab bar — multiple selectors to cover Streamlit version differences */
+[data-testid="stTabBar"],
+[data-baseweb="tab-list"],
+.stTabs [role="tablist"],
+div[class*="stTabBar"] {
+    position: sticky !important;
+    top: 0 !important;
+    z-index: 999 !important;
+    background-color: #0a0e14 !important;
     padding-top: 0.4rem;
     padding-bottom: 0.2rem;
     border-bottom: 1px solid #131e2e;

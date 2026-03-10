@@ -15,7 +15,10 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-VERSION = "2.55"
+VERSION = "2.57"
+
+# Set to False to revert to the original st.tabs() layout
+_USE_SIDEBAR_NAV = True
 
 # ── Page config ─────────────────────────────────────────────────────────────────
 
@@ -23,7 +26,7 @@ st.set_page_config(
     page_title="LSE Research Terminal",
     page_icon="📡",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded" if _USE_SIDEBAR_NAV else "collapsed",
 )
 
 # ── Styling ──────────────────────────────────────────────────────────────────────
@@ -160,49 +163,91 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Tabs ─────────────────────────────────────────────────────────────────────────
+# ── Navigation ───────────────────────────────────────────────────────────────────
 
-tab_signals, tab_discovery, tab_universe, tab_ingest, tab_performance, tab_config = st.tabs([
-    f"Signals  [{len(signals)}]",
+import contextlib
+
+_NAV_OPTIONS = [
+    f"Signals  [{len(signals) + len(director_signals or [])}]",
     f"Discovery  [{len(discoveries)}]",
     "Universe",
     "Ingest",
     "Performance",
     "Config",
-])
+]
+_NAV_KEYS = ["Signals", "Discovery", "Universe", "Ingest", "Performance", "Config"]
 
-# ── Signals tab ──────────────────────────────────────────────────────────────────
+if _USE_SIDEBAR_NAV:
+    with st.sidebar:
+        st.markdown(
+            '<div style="font-family:IBM Plex Mono,monospace;font-size:0.65rem;'
+            'color:#5a7a9a;letter-spacing:0.12em;text-transform:uppercase;'
+            'margin-bottom:0.75rem;">Navigation</div>',
+            unsafe_allow_html=True,
+        )
+        _nav_choice = st.radio(
+            "nav", _NAV_OPTIONS, label_visibility="collapsed", key="sidebar_nav"
+        )
+        _active = _NAV_KEYS[_NAV_OPTIONS.index(_nav_choice)]
 
-with tab_signals:
-    render_signals_tab(db, signals, company_map, director_signals=director_signals)
+    def _is(section: str) -> bool:
+        return _active == section
+
+    _ctx_signals     = contextlib.nullcontext()
+    _ctx_discovery   = contextlib.nullcontext()
+    _ctx_universe    = contextlib.nullcontext()
+    _ctx_ingest      = contextlib.nullcontext()
+    _ctx_performance = contextlib.nullcontext()
+    _ctx_config      = contextlib.nullcontext()
+
+else:
+    def _is(section: str) -> bool:  # type: ignore[misc]
+        return True  # tabs handle visibility themselves
+
+    (tab_signals, tab_discovery, tab_universe,
+     tab_ingest, tab_performance, tab_config) = st.tabs(_NAV_OPTIONS)
+
+    _ctx_signals     = tab_signals
+    _ctx_discovery   = tab_discovery
+    _ctx_universe    = tab_universe
+    _ctx_ingest      = tab_ingest
+    _ctx_performance = tab_performance
+    _ctx_config      = tab_config
+
+# ── Signals ──────────────────────────────────────────────────────────────────────
+
+with _ctx_signals:
+    if _is("Signals"):
+        render_signals_tab(db, signals, company_map, director_signals=director_signals)
 
 # ── Discovery tab ────────────────────────────────────────────────────────────────
 
-with tab_discovery:
-    if not discoveries:
-        st.markdown('<div class="empty-state">NO DISCOVERY ITEMS</div>', unsafe_allow_html=True)
-        st.caption(
-            "Discovery results are created when the job runner processes a company that is "
-            "not in the monitored universe. To generate one: upload an LSEG export in the "
-            "Ingest tab, find a row with outcome DISCOVERY, click → Pass to move it to "
-            "Passed, then submit it for analysis. The job runner routes non-universe "
-            "submissions here automatically."
-        )
-    else:
-        def discovery_sort_key(item):
-            val = get_field(item[1].get("discovery_assessment", ""), "RECOMMEND_ADD").lower()
-            return {"yes": 0, "maybe": 1}.get(val, 2)
+with _ctx_discovery:
+    if _is("Discovery"):
+        if not discoveries:
+            st.markdown('<div class="empty-state">NO DISCOVERY ITEMS</div>', unsafe_allow_html=True)
+            st.caption(
+                "Discovery results are created when the job runner processes a company that is "
+                "not in the monitored universe. To generate one: upload an LSEG export in the "
+                "Ingest tab, find a row with outcome DISCOVERY, click → Pass to move it to "
+                "Passed, then submit it for analysis. The job runner routes non-universe "
+                "submissions here automatically."
+            )
+        else:
+            def discovery_sort_key(item):
+                val = get_field(item[1].get("discovery_assessment", ""), "RECOMMEND_ADD").lower()
+                return {"yes": 0, "maybe": 1}.get(val, 2)
 
-        for doc_id, result in sorted(discoveries, key=discovery_sort_key):
-            assessment = result.get("discovery_assessment", "")
-            badge_html, card_class = recommend_add_badge(assessment)
-            company    = get_field(assessment, "COMPANY")
-            reason     = get_field(assessment, "REASON")
-            thesis_fit = get_field(assessment, "THESIS_FIT")
-            source_badge = f'<span class="badge badge-source">{result.get("source", "—")}</span>'
-            thesis_badge = f'<span class="badge badge-source">Thesis fit {thesis_fit}</span>' if thesis_fit else ""
+            for doc_id, result in sorted(discoveries, key=discovery_sort_key):
+                assessment = result.get("discovery_assessment", "")
+                badge_html, card_class = recommend_add_badge(assessment)
+                company    = get_field(assessment, "COMPANY")
+                reason     = get_field(assessment, "REASON")
+                thesis_fit = get_field(assessment, "THESIS_FIT")
+                source_badge = f'<span class="badge badge-source">{result.get("source", "—")}</span>'
+                thesis_badge = f'<span class="badge badge-source">Thesis fit {thesis_fit}</span>' if thesis_fit else ""
 
-            st.markdown(f"""
+                st.markdown(f"""
 <div class="signal-card {card_class}">
     <div>
         <span class="card-ticker">{company or result.get("company_name", "—")}</span>
@@ -214,50 +259,51 @@ with tab_discovery:
 </div>
 """, unsafe_allow_html=True)
 
-            col1, col2 = st.columns([8, 1])
-            with col1:
-                with st.expander("Full assessment"):
-                    parsed = parse_analysis(assessment)
-                    formatted = "\n".join(
-                        f"{k}: {v}" if k else v
-                        for k, v in parsed
-                    )
-                    st.markdown(f'<div class="analysis-block">{formatted}</div>', unsafe_allow_html=True)
-
-                with st.expander("Admit to Universe"):
-                    admit_ticker = st.text_input(
-                        "Ticker", value=result.get("ticker", ""),
-                        key=f"disc_admit_ticker_{doc_id}"
-                    )
-                    admit_name = st.text_input(
-                        "Company Name", value=result.get("company_name", ""),
-                        key=f"disc_admit_name_{doc_id}"
-                    )
-                    admit_exchange = st.selectbox(
-                        "Exchange", ["AIM", "LSE Main"],
-                        key=f"disc_admit_exchange_{doc_id}"
-                    )
-                    admit_mcap = st.number_input(
-                        "Market Cap (£M)", min_value=0.0,
-                        value=0.0, key=f"disc_admit_mcap_{doc_id}"
-                    )
-                    if st.button("Submit for admission", key=f"disc_admit_submit_{doc_id}"):
-                        exch_code = "AIM" if admit_exchange == "AIM" else "LSE_MAIN"
-                        mcap_gbp = admit_mcap * 1_000_000 if admit_mcap > 0 else None
-                        submit_universe_admit_job(
-                            db, admit_ticker, admit_name, mcap_gbp, exch_code,
-                            not_of_interest=False, source_discovery_id=doc_id
+                col1, col2 = st.columns([8, 1])
+                with col1:
+                    with st.expander("Full assessment"):
+                        parsed = parse_analysis(assessment)
+                        formatted = "\n".join(
+                            f"{k}: {v}" if k else v
+                            for k, v in parsed
                         )
-                        st.success("Admission job submitted — CH lookup running on VM.")
+                        st.markdown(f'<div class="analysis-block">{formatted}</div>', unsafe_allow_html=True)
 
-            with col2:
-                if st.button("Dismiss", key=f"dismiss_disc_{doc_id}"):
-                    dismiss_document(db, "discovery_results", doc_id)
-                    st.rerun()
+                    with st.expander("Admit to Universe"):
+                        admit_ticker = st.text_input(
+                            "Ticker", value=result.get("ticker", ""),
+                            key=f"disc_admit_ticker_{doc_id}"
+                        )
+                        admit_name = st.text_input(
+                            "Company Name", value=result.get("company_name", ""),
+                            key=f"disc_admit_name_{doc_id}"
+                        )
+                        admit_exchange = st.selectbox(
+                            "Exchange", ["AIM", "LSE Main"],
+                            key=f"disc_admit_exchange_{doc_id}"
+                        )
+                        admit_mcap = st.number_input(
+                            "Market Cap (£M)", min_value=0.0,
+                            value=0.0, key=f"disc_admit_mcap_{doc_id}"
+                        )
+                        if st.button("Submit for admission", key=f"disc_admit_submit_{doc_id}"):
+                            exch_code = "AIM" if admit_exchange == "AIM" else "LSE_MAIN"
+                            mcap_gbp = admit_mcap * 1_000_000 if admit_mcap > 0 else None
+                            submit_universe_admit_job(
+                                db, admit_ticker, admit_name, mcap_gbp, exch_code,
+                                not_of_interest=False, source_discovery_id=doc_id
+                            )
+                            st.success("Admission job submitted — CH lookup running on VM.")
+
+                with col2:
+                    if st.button("Dismiss", key=f"dismiss_disc_{doc_id}"):
+                        dismiss_document(db, "discovery_results", doc_id)
+                        st.rerun()
 
 # ── Universe tab ─────────────────────────────────────────────────────────────────
 
-with tab_universe:
+with _ctx_universe:
+  if _is("Universe"):
     st.markdown("""
 **Monitored Universe** — LSE-listed small-cap companies actively monitored for investment signals.
 
@@ -535,78 +581,81 @@ with tab_universe:
 
 # ── Ingest tab ───────────────────────────────────────────────────────────────────
 
-with tab_ingest:
-    render_ingest_tab(db)
+with _ctx_ingest:
+    if _is("Ingest"):
+        render_ingest_tab(db)
 
 # ── Performance tab ──────────────────────────────────────────────────────────────
 
-with tab_performance:
-    render_performance_tab(db)
+with _ctx_performance:
+    if _is("Performance"):
+        render_performance_tab(db)
 
 # ── Config tab ───────────────────────────────────────────────────────────────────
 
-with tab_config:
+with _ctx_config:
+    if _is("Config"):
 
-    # ── Announcement Type Exclusions ────────────────────────────────────────────
+        # ── Announcement Type Exclusions ──────────────────────────────────────────
 
-    st.markdown(
-        '<div class="terminal-header" style="margin-bottom:0.6rem;">Announcement Type Exclusions</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Announcement types suppressed before LLM analysis. Match is case-insensitive substring.")
+        st.markdown(
+            '<div class="terminal-header" style="margin-bottom:0.6rem;">Announcement Type Exclusions</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Announcement types suppressed before LLM analysis. Match is case-insensitive substring.")
 
-    current_excluded = get_exclusion_list(db)
+        current_excluded = get_exclusion_list(db)
 
-    for entry in current_excluded:
-        col_label, col_btn = st.columns([5, 1])
-        col_label.caption(entry)
-        if col_btn.button("×", key=f"remove_excl_{entry}"):
-            updated = [e for e in current_excluded if e != entry]
-            save_exclusion_list(db, updated)
+        for entry in current_excluded:
+            col_label, col_btn = st.columns([5, 1])
+            col_label.caption(entry)
+            if col_btn.button("×", key=f"remove_excl_{entry}"):
+                updated = [e for e in current_excluded if e != entry]
+                save_exclusion_list(db, updated)
+                st.rerun()
+
+        st.markdown("")
+        new_type = st.text_input(
+            "Add type",
+            key="new_excl_type",
+            placeholder="e.g. Result of EGM",
+            label_visibility="collapsed",
+        )
+        if st.button("Add", key="add_excl_type_btn") and new_type.strip():
+            entry = new_type.strip()
+            if entry not in current_excluded:
+                save_exclusion_list(db, current_excluded + [entry])
             st.rerun()
 
-    st.markdown("")
-    new_type = st.text_input(
-        "Add type",
-        key="new_excl_type",
-        placeholder="e.g. Result of EGM",
-        label_visibility="collapsed",
-    )
-    if st.button("Add", key="add_excl_type_btn") and new_type.strip():
-        entry = new_type.strip()
-        if entry not in current_excluded:
-            save_exclusion_list(db, current_excluded + [entry])
-        st.rerun()
+        st.markdown("---")
 
-    st.markdown("---")
+        # ── Company Name Keywords ─────────────────────────────────────────────────
 
-    # ── Company Name Keywords ───────────────────────────────────────────────────
+        st.markdown(
+            '<div class="terminal-header" style="margin-bottom:0.6rem;">Company Name Keywords</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Company names containing these substrings are suppressed (investment trusts / funds). Case-insensitive.")
 
-    st.markdown(
-        '<div class="terminal-header" style="margin-bottom:0.6rem;">Company Name Keywords</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption("Company names containing these substrings are suppressed (investment trusts / funds). Case-insensitive.")
+        current_keywords = get_company_keywords(db)
 
-    current_keywords = get_company_keywords(db)
+        for kw in current_keywords:
+            col_label, col_btn = st.columns([5, 1])
+            col_label.caption(kw)
+            if col_btn.button("×", key=f"remove_kw_{kw}"):
+                updated = [k for k in current_keywords if k != kw]
+                save_company_keywords(db, updated)
+                st.rerun()
 
-    for kw in current_keywords:
-        col_label, col_btn = st.columns([5, 1])
-        col_label.caption(kw)
-        if col_btn.button("×", key=f"remove_kw_{kw}"):
-            updated = [k for k in current_keywords if k != kw]
-            save_company_keywords(db, updated)
+        st.markdown("")
+        new_kw = st.text_input(
+            "Add keyword",
+            key="new_company_kw",
+            placeholder="e.g. reit",
+            label_visibility="collapsed",
+        )
+        if st.button("Add", key="add_company_kw_btn") and new_kw.strip():
+            kw = new_kw.strip().lower()
+            if kw not in current_keywords:
+                save_company_keywords(db, current_keywords + [kw])
             st.rerun()
-
-    st.markdown("")
-    new_kw = st.text_input(
-        "Add keyword",
-        key="new_company_kw",
-        placeholder="e.g. reit",
-        label_visibility="collapsed",
-    )
-    if st.button("Add", key="add_company_kw_btn") and new_kw.strip():
-        kw = new_kw.strip().lower()
-        if kw not in current_keywords:
-            save_company_keywords(db, current_keywords + [kw])
-        st.rerun()
