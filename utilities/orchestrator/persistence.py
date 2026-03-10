@@ -251,7 +251,117 @@ def persist_news_summary(
 
 
 # ---------------------------------------------------------------------------
-# Stage 2: signals collection — simple lens output
+# TR-1: signals collection — TR-1 signal document
+# ---------------------------------------------------------------------------
+
+def persist_tr1_signal(
+    rns_article_id: str,
+    ticker: str,
+    company_name: str,
+    published_at,
+    tr1_data: dict,
+    simple_result: dict,
+    db=None,
+) -> None:
+    """
+    Create or update the signals document for a TR-1 crossing.
+
+    Writes tr1 extraction data, simple lens result, and housekeeping fields.
+    agentic_status is set to "pending" when investor research should follow,
+    or "skipped" if the caller determines research is not warranted — the
+    caller should call update_agentic_status("skipped") after this function
+    if needed (defaults to "pending" here).
+
+    Parameters
+    ----------
+    rns_article_id : str
+        The signals document_id (deduplication key = SHA-256 fingerprint).
+    ticker : str
+    company_name : str
+    published_at : datetime | str
+        Publication timestamp of the RNS filing.
+    tr1_data : dict
+        Extracted TR-1 fields from classification. Expected keys:
+        notifier_name, issuer_name, direction, old_holding_pct,
+        new_holding_pct, threshold_crossed, nature_of_holding, crossing_date.
+    simple_result : dict
+        Parsed output from lens_tr1_simple (signal_strength, direction,
+        recommendation, rationale, trigger_investor_research, limitations).
+    db : Firestore client, optional
+    """
+    db = db or _get_db()
+
+    doc = {
+        # Identity
+        "ticker": ticker,
+        "company_name": company_name,
+        "published_at": published_at,
+        "signal_type": "tr1_crossing",
+        # TR-1 extraction data
+        "notifier_name": tr1_data.get("notifier_name"),
+        "issuer_name": tr1_data.get("issuer_name"),
+        "direction": tr1_data.get("direction"),
+        "old_holding_pct": tr1_data.get("old_holding_pct"),
+        "new_holding_pct": tr1_data.get("new_holding_pct"),
+        "threshold_crossed": tr1_data.get("threshold_crossed"),
+        "nature_of_holding": tr1_data.get("nature_of_holding"),
+        "crossing_date": tr1_data.get("crossing_date"),
+        # Simple lens result (nested dict for clean UI display)
+        "simple_lens_result": simple_result,
+        "simple_completed_at": datetime.now(tz=timezone.utc),
+        # Agentic status — caller may override to "skipped" immediately after
+        "agentic_status": "pending",
+        # Investor decision — pending until human acts
+        "investor_action": "pending",
+        # Housekeeping
+        "created_at": datetime.now(tz=timezone.utc),
+        "expires_at": _expires_at(SIGNAL_TTL_DAYS),
+    }
+
+    db.collection("signals").document(rns_article_id).set(doc, merge=True)
+
+
+def persist_tr1_investor_research(
+    rns_article_id: str,
+    research_result: dict,
+    token_usage: dict,
+    db=None,
+) -> None:
+    """
+    Write investor research output to the signals document.
+
+    Called after the investor research layer completes (or fails).
+    Sets agentic_status to "complete" on success or "failed" on error.
+
+    Parameters
+    ----------
+    rns_article_id : str
+        The signals document_id.
+    research_result : dict
+        Parsed output from lens_tr1_investor_research. Contains "_error"
+        key if parsing failed.
+    token_usage : dict
+        {"input": int, "output": int, "model": str}.
+    db : Firestore client, optional
+    """
+    db = db or _get_db()
+
+    status = "failed" if research_result.get("_error") else "complete"
+
+    db.collection("signals").document(rns_article_id).set(
+        {
+            "investor_research": research_result,
+            "investor_research_completed_at": datetime.now(tz=timezone.utc),
+            "investor_research_token_usage": token_usage,
+            "agentic_status": status,
+            "agentic_completed_at": datetime.now(tz=timezone.utc),
+        },
+        merge=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: signals collection — simple lens output (director buying)
 # ---------------------------------------------------------------------------
 
 def persist_simple_lens_result(

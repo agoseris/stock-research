@@ -1,21 +1,26 @@
 """
 run_orchestrator.py
 
-Local daemon that picks up director buying signals and runs the agentic
-investigation (Layer 1–3) plus synthesis.
+Local daemon that picks up pending signals and runs the deeper agentic
+investigation for each signal type.
 
 Must run locally — NOT on the VM — because yfinance requires a residential
 IP address. The VM handles classification and simple lens (job_runner.py);
 this script handles the deeper investigation from your local machine.
 
-Flow for each pending signal document:
-  1. Claim it (agentic_status: "pending" → "claimed")
-  2. Fetch transaction data from pdmr_transactions
-  3. Fetch announcement metadata from announcements
-  4. Fetch company profile from universe_companies
-  5. Reconstruct simple_lens_output from signals doc simple_* fields
-  6. Run parallel agentic investigation (sets status → "running")
-  7. Run synthesis (sets status → "complete" or "failed")
+Signal routing (by signal_type field on the signals document):
+  director_buying / director_disposal:
+    1. Claim signal (agentic_status: "pending" → "claimed")
+    2. Fetch transaction data from pdmr_transactions
+    3. Fetch announcement + company profile
+    4. Run parallel Layer 1–3 agentic investigation
+    5. Run synthesis → agentic_status: "complete" or "failed"
+
+  tr1_crossing:
+    1. Claim signal (agentic_status: "pending" → "claimed")
+    2. Fetch TR-1 data from signals doc (already stored by simple lens)
+    3. Run Gemini Flash + Google Search grounding investor research
+    4. Persist result → agentic_status: "complete" or "failed"
 
 Usage:
     # Daemon mode — polls continuously
@@ -24,7 +29,7 @@ Usage:
     # One-shot mode — process pending signals once and exit (useful for testing)
     python scripts/run_orchestrator.py --once
 
-    # Debug mode — sequential layers, verbose logging
+    # Debug mode — sequential layers, verbose logging (director signals only)
     python scripts/run_orchestrator.py --sequential
 """
 
@@ -61,6 +66,7 @@ from utilities.orchestrator.layer_runner import (
     run_agentic_investigation_sequential,
 )
 from utilities.orchestrator.synthesis import run_synthesis
+from utilities.orchestrator.lens_tr1_investor_research import run_tr1_investor_research
 
 logging.basicConfig(
     level=logging.INFO,
@@ -180,7 +186,59 @@ def _coerce_published_at(value) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Signal processor
+# TR-1 signal processor
+# ---------------------------------------------------------------------------
+
+def process_tr1_signal(
+    db,
+    doc_id: str,
+    signal_data: dict,
+) -> None:
+    """
+    Run investor research for one pending TR-1 crossing signal.
+
+    Reads the notifier data from signal_data (already stored by
+    lens_tr1_simple in job_runner.py) and calls Gemini Flash +
+    Google Search grounding via run_tr1_investor_research.
+
+    Parameters
+    ----------
+    db : Firestore client
+    doc_id : str
+        The signals document_id (= rns_article_id).
+    signal_data : dict
+        The signals document data (already contains tr1 extraction fields).
+    """
+    ticker = signal_data.get("ticker", "UNKNOWN")
+    notifier = signal_data.get("notifier_name") or "Unknown"
+    threshold = signal_data.get("threshold_crossed")
+    threshold_str = f"{threshold:.0f}%" if threshold else "?"
+
+    logger.info(
+        "[%s] TR-1 investor research — notifier=%s threshold=%s signal %s",
+        ticker, notifier[:50], threshold_str, doc_id[:8],
+    )
+
+    result, token_usage = run_tr1_investor_research(
+        rns_article_id=doc_id,
+        signal_data=signal_data,
+        db=db,
+    )
+
+    if result.get("_error"):
+        logger.error("[%s] Investor research failed: %s", ticker, result["_error"])
+    else:
+        logger.info(
+            "[%s] Investor research complete — type=%s conviction=%s confidence=%s",
+            ticker,
+            result.get("notifier_type"),
+            result.get("conviction_assessment"),
+            result.get("confidence"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Director signal processor
 # ---------------------------------------------------------------------------
 
 def process_signal(
@@ -331,18 +389,35 @@ def run(sequential: bool = False, once: bool = False) -> None:
                     # Re-check status after fetch (race condition guard)
                     if signal_data.get("agentic_status") != "pending":
                         continue
-                    if _claim_signal(db, doc.id):
-                        try:
+                    if not _claim_signal(db, doc.id):
+                        continue
+
+                    signal_type = signal_data.get("signal_type", "")
+                    try:
+                        if signal_type == "tr1_crossing":
+                            process_tr1_signal(db, doc.id, signal_data)
+                        elif signal_type in ("director_buying", "director_disposal", ""):
+                            # Empty signal_type: backwards-compatible — treat as director
                             process_signal(db, client, doc.id, signal_data, sequential=sequential)
-                        except Exception as e:
-                            logger.error("Signal %s failed unexpectedly: %s", doc.id[:8], e)
-                            try:
-                                db.collection("signals").document(doc.id).set(
-                                    {"agentic_status": "failed", "agentic_synthesis_error": str(e)},
-                                    merge=True,
-                                )
-                            except Exception:
-                                pass
+                        else:
+                            logger.warning(
+                                "Unknown signal_type %r on signal %s — skipping.",
+                                signal_type, doc.id[:8],
+                            )
+                            db.collection("signals").document(doc.id).set(
+                                {"agentic_status": "skipped",
+                                 "agentic_synthesis_error": f"unknown signal_type: {signal_type}"},
+                                merge=True,
+                            )
+                    except Exception as e:
+                        logger.error("Signal %s failed unexpectedly: %s", doc.id[:8], e)
+                        try:
+                            db.collection("signals").document(doc.id).set(
+                                {"agentic_status": "failed", "agentic_synthesis_error": str(e)},
+                                merge=True,
+                            )
+                        except Exception:
+                            pass
             else:
                 if not once:
                     print(

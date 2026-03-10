@@ -9,6 +9,9 @@ ORCHESTRATOR_CONFIG = {
     # --- Models ---
     # Classification accuracy is critical — always use Sonnet
     "classification_model": "claude-sonnet-4-6",
+    # TR-1 simple lens and investor research — Gemini Flash (free tier)
+    "tr1_simple_lens_model": "gemini-2.0-flash",
+    "tr1_investor_research_model": "gemini-2.0-flash",
     # Simple lens is one-shot from pre-extracted data — Haiku is sufficient
     "simple_lens_model": "claude-haiku-4-5-20251001",
     # Layer 1: platform assessment — moderate reasoning, Haiku appropriate
@@ -46,6 +49,7 @@ ORCHESTRATOR_CONFIG = {
 # Article-type TTL in days for the announcements collection base record
 ANNOUNCEMENT_TTL_DAYS = {
     "pdmr_transaction": None,      # no expiry on base record
+    "tr1_crossing": None,          # no expiry — retained alongside pdmr
     "regulatory_catalyst": 90,     # 3 months
     "substantive_news": 90,        # 3 months
     "administrative": 14,          # 2 weeks

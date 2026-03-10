@@ -41,9 +41,11 @@ import anthropic
 from utilities.orchestrator.classification import (
     classify_article,
     get_open_market_transactions,
+    get_tr1_data,
 )
 from utilities.orchestrator.persistence import update_agentic_status
 from utilities.orchestrator.simple_lens import run_simple_lens
+from utilities.orchestrator.lens_tr1_simple import run_tr1_simple_lens
 
 from abstractions import Announcement, UniverseCompany
 from google.cloud import firestore
@@ -350,6 +352,61 @@ REASON: [one sentence]"""
             job_id,
             note=f"pdmr_simple_lens_done:{len(open_market_txs)}_txs",
         )
+
+    def _run_tr1_flow(
+        self,
+        job_id: str,
+        announcement: "Announcement",
+        classification: dict,
+        job: dict,
+        rns_article_id: str,
+    ):
+        """
+        Handle a TR-1 crossing article: run the TR-1 simple lens and persist
+        a signal document with signal_type="tr1_crossing".
+
+        Investor research (Gemini Flash + Search grounding) is handled
+        separately by scripts/run_orchestrator.py, which picks up signals
+        where agentic_status="pending".
+        """
+        ticker = announcement.ticker
+        tr1_data = get_tr1_data(classification)
+        tr1_data["ticker"] = ticker
+        tr1_data["company_name"] = announcement.company_name
+
+        notifier = tr1_data.get("notifier_name") or "Unknown"
+        direction = tr1_data.get("direction") or "unknown"
+        print(f"  [{ticker}] TR-1: notifier={notifier[:40]} direction={direction}")
+
+        # Store announcement metadata on the signals doc for UI display
+        try:
+            self.db.collection("signals").document(rns_article_id).set({
+                "headline": announcement.headline or "",
+                "source_url": announcement.source_url or "",
+                "announcement_published_at": announcement.published_at.isoformat(),
+            }, merge=True)
+        except Exception as e:
+            print(f"  [{ticker}] Could not store TR-1 announcement metadata: {e}")
+
+        company = self.universe_storage.get_company(ticker)
+        company_profile = _build_company_profile(company)
+
+        try:
+            simple_result = run_tr1_simple_lens(
+                rns_article_id=rns_article_id,
+                tr1_data=tr1_data,
+                company_profile=company_profile,
+                db=self.db,
+            )
+            rec = simple_result.get("recommendation", "unknown")
+            strength = simple_result.get("signal_strength", "unknown")
+            trigger = simple_result.get("trigger_investor_research", False)
+            print(f"  [{ticker}] TR-1 simple lens: {rec} (strength={strength}, "
+                  f"trigger_research={trigger})")
+        except Exception as e:
+            print(f"  [{ticker}] TR-1 simple lens failed: {e}")
+
+        self._complete_job(job_id, note="tr1_simple_lens_done")
 
     # ------------------------------------------------------------------
     # Notifications
@@ -659,6 +716,10 @@ REASON: [one sentence]"""
 
                 if article_type == "pdmr_transaction":
                     self._run_pdmr_flow(job_id, announcement, classification, job, rns_article_id)
+                    return
+
+                if article_type == "tr1_crossing":
+                    self._run_tr1_flow(job_id, announcement, classification, job, rns_article_id)
                     return
 
                 if classification.get("extraction_status") == "failed":

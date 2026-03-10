@@ -80,6 +80,12 @@ not the headline alone. Read the complete content before deciding.
 
 Classify this article as exactly one of:
 - pdmr_transaction: A director or PDMR share transaction notification
+- tr1_crossing: A Significant Shareholder notification disclosing a \
+voting rights threshold crossing (TR-1 standard form). The RNS \
+headline typically begins "TR-1:" or is titled "Holding(s) in \
+Company". The body follows the standardised TR-1 form and discloses \
+the notifier name, issuer name, old and new percentage holdings, and \
+the date of the triggering transaction.
 - regulatory_catalyst: Regulatory approval, planning permission, \
 licence, permit, or related catalyst event
 - substantive_news: Trading update, financial results, operational \
@@ -93,8 +99,16 @@ CLASSIFICATION PRIORITY RULES:
 1. pdmr_transaction takes priority over all other types.
    If the article contains a director or PDMR share transaction,
    classify as pdmr_transaction regardless of other content.
+   A filing that is both a TR-1 and a director transaction is
+   classified as pdmr_transaction.
 
-2. regulatory_catalyst takes priority over substantive_news.
+2. tr1_crossing is the second priority.
+   If the headline begins "TR-1:" or "Holding(s) in Company" AND
+   the body discloses a voting rights percentage threshold crossing,
+   classify as tr1_crossing. These are NOT director transactions
+   and must NOT be classified as administrative.
+
+3. regulatory_catalyst takes priority over substantive_news.
    If the article contains a clear regulatory catalyst event —
    approval, licence, permit, consent, rejection, or similar —
    AND other substantive content, classify as regulatory_catalyst.
@@ -102,18 +116,20 @@ CLASSIFICATION PRIORITY RULES:
    regulatory_catalyst. The presence of surrounding narrative
    does not demote it to substantive_news.
 
-3. substantive_news only if no higher-priority content is present.
+4. substantive_news only if no higher-priority content is present.
    Classify as substantive_news only when the article contains
-   no director transaction and no regulatory catalyst event.
+   no director transaction, no TR-1 crossing, and no regulatory
+   catalyst event.
 
-4. administrative only if the content is genuinely non-material.
+5. administrative only if the content is genuinely non-material.
    Routine filings, process announcements, and housekeeping notices
-   with no transaction, catalyst, or substantive operational content.
+   with no transaction, catalyst, TR-1 crossing, or substantive
+   operational content.
 
 KNOWN LIMITATION — COMBINED FILINGS:
 This prompt returns a single article_type. A filing that genuinely
 contains both a regulatory catalyst and substantive news will be
-classified as regulatory_catalyst (per priority rule 2). The
+classified as regulatory_catalyst (per priority rule 3). The
 substantive news summary will not be stored in this case. This is
 an accepted PoC limitation — the more important signal (catalyst)
 is preserved. This limitation is pinned for future handling.
@@ -186,6 +202,34 @@ For each transaction, extract:
     - "Double 'pp' typo in source document for price field"
     - "Reporting lag of X days — transaction occurred [date]"
 
+STEP 2b — EXTRACT TR-1 DATA (only if tr1_crossing)
+
+If article_type is tr1_crossing, extract:
+  tr1_notifier_name: Name of the disclosing party (the shareholder,
+    not the listed company)
+  tr1_issuer_name: Name of the listed company in which the interest
+    is held
+  tr1_old_holding_pct: Holding percentage BEFORE the triggering
+    transaction (float or null if not stated)
+  tr1_new_holding_pct: Holding percentage AFTER the triggering
+    transaction (float or null if not stated)
+  tr1_direction: "upward" if new_pct > old_pct;
+    "downward" if new_pct < old_pct; "unknown" otherwise
+  tr1_threshold_crossed: The specific threshold crossed as a float
+    (3, 5, 10, 15, 20, 25, or 30) — or null if cannot be determined
+  tr1_nature_of_holding: Nature and quality of the holding as stated
+    in the filing (e.g. "Ordinary shares", "Financial instruments",
+    "Combination of shares and financial instruments"). Quote directly
+    from the filing if possible.
+  tr1_crossing_date: Date of the triggering transaction (YYYY-MM-DD
+    or null)
+
+For multi-issuer TR-1 filings (group-level disclosures covering
+holdings in multiple companies): extract data for the primary or
+first issuer only and note this in tr1_nature_of_holding.
+
+If article_type is not tr1_crossing, set all tr1_* fields to null.
+
 STEP 3 — SUMMARISE
 
 Provide a 2-3 sentence summary appropriate to the article type:
@@ -233,11 +277,20 @@ RESPOND IN EXACTLY THIS JSON FORMAT — no preamble, no markdown fences:
       "extraction_confidence": "",
       "confidence_notes": ""
     }}
-  ]
+  ],
+  "tr1_notifier_name": null,
+  "tr1_issuer_name": null,
+  "tr1_old_holding_pct": null,
+  "tr1_new_holding_pct": null,
+  "tr1_direction": null,
+  "tr1_threshold_crossed": null,
+  "tr1_nature_of_holding": null,
+  "tr1_crossing_date": null
 }}
 
 If article_type is not pdmr_transaction, set transactions to an \
 empty array [].
+If article_type is not tr1_crossing, set all tr1_* fields to null.
 If sentiment, key_topics, or article_subtype are not applicable \
 to the article_type, set to null."""
 
@@ -247,7 +300,8 @@ to the article_type, set to null."""
 # ---------------------------------------------------------------------------
 
 _VALID_ARTICLE_TYPES = frozenset(
-    ["pdmr_transaction", "regulatory_catalyst", "substantive_news", "administrative"]
+    ["pdmr_transaction", "tr1_crossing", "regulatory_catalyst",
+     "substantive_news", "administrative"]
 )
 
 _OPEN_MARKET_CATEGORIES = frozenset(
@@ -409,7 +463,7 @@ def route_classification(
     -------
     str
         The article_type string for the caller to act on:
-        "pdmr_transaction" | "regulatory_catalyst" |
+        "pdmr_transaction" | "tr1_crossing" | "regulatory_catalyst" |
         "substantive_news" | "administrative"
 
     Side effects
@@ -459,6 +513,14 @@ def route_classification(
             db=db,
         )
         logger.info("classification: substantive_news summary persisted for %s", ticker)
+
+    elif article_type == "tr1_crossing":
+        logger.info(
+            "classification: tr1_crossing for %s — notifier=%s direction=%s",
+            ticker,
+            classification.get("tr1_notifier_name"),
+            classification.get("tr1_direction"),
+        )
 
     elif article_type == "regulatory_catalyst":
         logger.info(
@@ -510,6 +572,8 @@ def classify_article(
     -----------------------
     - For pdmr_transaction: iterate classification["transactions"] and call
       the orchestrator for those with open_market category.
+    - For tr1_crossing: call get_tr1_data(classification) and route to
+      the TR-1 flow (lens_tr1_simple + investor research).
     - For regulatory_catalyst: call existing lens_catalyst.
     - For substantive_news / administrative: nothing further required.
     """
@@ -529,6 +593,25 @@ def classify_article(
 # ---------------------------------------------------------------------------
 # Helper: identify transactions that should trigger the director lenses
 # ---------------------------------------------------------------------------
+
+def get_tr1_data(classification: dict) -> dict:
+    """
+    Extract the TR-1 crossing data from a tr1_crossing classification result.
+
+    Returns a flat dict with clean key names (without the tr1_ prefix)
+    suitable for passing to the TR-1 simple lens and persistence functions.
+    """
+    return {
+        "notifier_name": classification.get("tr1_notifier_name"),
+        "issuer_name": classification.get("tr1_issuer_name"),
+        "old_holding_pct": classification.get("tr1_old_holding_pct"),
+        "new_holding_pct": classification.get("tr1_new_holding_pct"),
+        "direction": classification.get("tr1_direction"),
+        "threshold_crossed": classification.get("tr1_threshold_crossed"),
+        "nature_of_holding": classification.get("tr1_nature_of_holding"),
+        "crossing_date": classification.get("tr1_crossing_date"),
+    }
+
 
 def get_open_market_transactions(classification: dict) -> list:
     """
