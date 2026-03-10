@@ -238,7 +238,8 @@ def _eligible_signal_result(data: dict) -> bool:
     if data.get("dismissed", False):
         return False
     strength = (data.get("signal_strength") or "").lower()
-    return strength in ("strong", "moderate")
+    # "weak" maps to monitor state — include it. "noise" = no action — exclude.
+    return strength in ("strong", "moderate", "weak")
 
 
 # ---------------------------------------------------------------------------
