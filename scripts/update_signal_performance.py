@@ -470,7 +470,13 @@ def _process_signal(
         stats["already_complete"] += 1
         return
 
-    # Build update payload
+    # Merge new snapshots into existing and write as a proper nested map.
+    # NOTE: set(..., merge=True) with dot-notation keys stores them as literal
+    # field names, not nested paths — only update() supports dot-notation.
+    # Writing the full snapshots dict avoids that pitfall entirely.
+    merged_snapshots = dict(existing_snapshots)
+    merged_snapshots.update(new_snapshots)
+
     update: dict = {
         "ticker":             ticker,
         "company_name":       data.get("company_name") or company.get("company_name") or "",
@@ -482,10 +488,8 @@ def _process_signal(
         "index_ticker":       index_yf,
         "source_collection":  collection,
         "last_updated":       datetime.now(tz=timezone.utc),
-        # Merge new snapshots into existing (use dot-notation-style field paths via merge)
+        "snapshots":          merged_snapshots,
     }
-    for key, snap in new_snapshots.items():
-        update[f"snapshots.{key}"] = snap
 
     snapshot_keys = sorted(new_snapshots.keys())
     flag = "[DRY RUN] " if dry_run else ""

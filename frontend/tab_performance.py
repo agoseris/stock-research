@@ -70,7 +70,12 @@ _LENS_ORDER = [
 # ---------------------------------------------------------------------------
 
 def _snap_pct(doc: dict, key: str, field: str = "pct_vs_baseline") -> float | None:
+    # Proper nested structure (correct format going forward)
     snap = (doc.get("snapshots") or {}).get(key) or {}
+    # Fallback: literal "snapshots.key" top-level field (written by initial
+    # script version that used set() with dot-notation keys — a Firestore gotcha)
+    if not snap:
+        snap = doc.get(f"snapshots.{key}") or {}
     val = snap.get(field)
     return float(val) if val is not None else None
 
