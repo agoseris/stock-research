@@ -233,13 +233,34 @@ def _eligible_signal(data: dict) -> bool:
     return rec in ("investigate", "monitor")
 
 
+def _parse_recommended_action(llm_analysis: str) -> str:
+    """
+    Extract RECOMMENDED_ACTION from raw LLM analysis text.
+    Returns 'yes', 'monitor', or 'no' (default).
+    """
+    for line in (llm_analysis or "").splitlines():
+        if "RECOMMENDED_ACTION" in line.upper():
+            val = line.split(":", 1)[-1].strip().lower()
+            if val.startswith("yes"):
+                return "yes"
+            if val.startswith("monitor"):
+                return "monitor"
+            return "no"
+    return "no"
+
+
 def _eligible_signal_result(data: dict) -> bool:
-    """Is a doc from signal_results eligible for performance tracking?"""
+    """
+    Is a doc from signal_results eligible for performance tracking?
+
+    signal_results docs do not store signal_strength — that is only written
+    to the signal_history subcollection by pipeline.py. Eligibility is
+    determined by parsing RECOMMENDED_ACTION from the raw llm_analysis text.
+    """
     if data.get("dismissed", False):
         return False
-    strength = (data.get("signal_strength") or "").lower()
-    # "weak" maps to monitor state — include it. "noise" = no action — exclude.
-    return strength in ("strong", "moderate", "weak")
+    action = _parse_recommended_action(data.get("llm_analysis") or "")
+    return action in ("yes", "monitor")
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +432,7 @@ def _process_signal(
     else:
         lens_type  = "regulatory_catalyst"
         strength   = data.get("signal_strength") or ""
-        rec        = ""
+        rec        = _parse_recommended_action(data.get("llm_analysis") or "")
 
     # Existing performance doc
     existing = existing_perf.get(doc_id, {})
@@ -556,17 +577,17 @@ def run(dry_run: bool, ticker_filter: str | None, debug: bool = False) -> None:
 
     if debug:
         from collections import Counter
-        sr_strength_counts: Counter = Counter()
+        sr_action_counts: Counter = Counter()
         sr_dismissed = 0
         for doc in sr_docs:
             d = doc.to_dict() or {}
             if d.get("dismissed", False):
                 sr_dismissed += 1
-            strength = (d.get("signal_strength") or "—").lower()
-            sr_strength_counts[strength] += 1
+            action = _parse_recommended_action(d.get("llm_analysis") or "")
+            sr_action_counts[action] += 1
         print(f"  dismissed: {sr_dismissed}")
-        print(f"  signal_strength breakdown:")
-        for k, v in sorted(sr_strength_counts.items()):
+        print(f"  RECOMMENDED_ACTION breakdown:")
+        for k, v in sorted(sr_action_counts.items()):
             print(f"    {k}: {v}")
 
     for doc in sr_docs:
