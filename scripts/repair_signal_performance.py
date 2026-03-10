@@ -1,14 +1,15 @@
 """
-repair_signal_performance.py  (one-off)
+repair_signal_performance.py
 
-signal_performance docs written by the initial script version contain
-malformed top-level fields with literal dots in their names
-(e.g. "snapshots.pre_90d") alongside the correct nested "snapshots" map.
+Wipe the signal_performance collection entirely so it can be repopulated
+cleanly by update_signal_performance.py.
 
-This script rewrites each document as a clean full set() — no merge —
-keeping only well-formed keys (no dots in key name).
+Usage:
+    python scripts/repair_signal_performance.py --dry-run   # preview
+    python scripts/repair_signal_performance.py             # apply
 
-Safe to re-run: idempotent once the malformed keys are gone.
+After running, repopulate with:
+    python scripts/update_signal_performance.py
 """
 
 import os
@@ -36,32 +37,19 @@ def run(dry_run: bool) -> None:
     docs = list(db.collection(COLLECTION).stream())
     print(f"{len(docs)} documents in {COLLECTION}")
 
-    repaired = 0
-    clean    = 0
+    if not docs:
+        print("Nothing to delete.")
+        return
 
-    for doc in docs:
-        data = doc.to_dict() or {}
-        malformed = [k for k in data if "." in k]
+    prefix = "[DRY RUN] " if dry_run else ""
+    print(f"{prefix}Deleting {len(docs)} documents...")
 
-        if not malformed:
-            clean += 1
-            continue
-
-        # Strip all malformed keys — keep only well-formed ones
-        clean_data = {k: v for k, v in data.items() if "." not in k}
-
-        prefix = "[DRY RUN] " if dry_run else ""
-        print(f"  {prefix}{doc.id[:24]}…  removing {len(malformed)} malformed keys")
-
-        if not dry_run:
-            doc.reference.set(clean_data)   # full replace — no merge
-
-        repaired += 1
-
-    print(f"\n  Already clean: {clean}")
-    print(f"  Repaired:      {repaired}")
-    if dry_run:
-        print(f"\n  Re-run without --dry-run to apply.")
+    if not dry_run:
+        for doc in docs:
+            doc.reference.delete()
+        print(f"Done. Run update_signal_performance.py to repopulate.")
+    else:
+        print(f"Re-run without --dry-run to apply.")
 
 
 if __name__ == "__main__":
