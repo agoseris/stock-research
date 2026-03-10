@@ -28,3 +28,9 @@
 # Writes AIM_ALL_SHARE, FTSE_SMALL_CAP, FTSE_250 snapshots to Firestore.
 # Check logs:   tail -f /home/agoseris/projects/stock-research/scripts/index_snapshot.log
 0 17 * * 1-5  cd /home/agoseris/projects/stock-research && scripts/venv/bin/python3 scripts/scrape_index_snapshots.py >> scripts/index_snapshot.log 2>&1
+
+# Signal performance snapshots — once daily at 18:00 UTC (Mon–Fri)
+# Fills due price snapshots for eligible signals (post_1d…post_12m + pre windows).
+# Runs locally (yfinance residential IP requirement).
+# Check logs:   tail -f /home/agoseris/projects/stock-research/scripts/signal_performance.log
+0 18 * * 1-5  cd /home/agoseris/projects/stock-research && scripts/venv/bin/python3 scripts/update_signal_performance.py >> scripts/signal_performance.log 2>&1
