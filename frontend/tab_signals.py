@@ -758,10 +758,10 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
     _dir_signals = []
     _tr1_signals = []
     for doc_id, sig in (director_signals or []):
-        st = sig.get("signal_type") or ""
-        if st == "tr1_crossing":
+        sig_type = sig.get("signal_type") or ""
+        if sig_type == "tr1_crossing":
             _tr1_signals.append((doc_id, sig))
-        elif st in _director_signal_types:
+        elif sig_type in _director_signal_types:
             _dir_signals.append((doc_id, sig))
 
     # ── Director lens signals section ────────────────────────────────────────────
