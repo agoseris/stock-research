@@ -226,12 +226,13 @@ def _eligible_signal(data: dict) -> bool:
     if (data.get("investor_action") or "") == "dismissed":
         return False
     rec = (
-        (data.get("simple_lens_result") or {}).get("recommendation")  # TR-1
-        or data.get("simple_recommended_action")                        # director buying
+        (data.get("simple_lens_result") or {}).get("recommendation")  # TR-1 (single word)
+        or data.get("simple_recommended_action")                        # director buying (may be full sentence)
         or data.get("recommendation")
         or ""
-    ).lower()
-    return rec in ("investigate", "monitor")
+    ).lower().strip()
+    # simple_recommended_action is a full sentence beginning with the verdict
+    return rec.startswith("investigate") or rec.startswith("monitor")
 
 
 def _parse_recommended_action(llm_analysis: str) -> str:
@@ -429,9 +430,10 @@ def _process_signal(
         lens_type  = data.get("signal_type") or "unknown"
         simple     = data.get("simple_lens_result") or {}
         strength   = simple.get("signal_strength") or data.get("signal_strength") or ""
-        rec        = (simple.get("recommendation")              # TR-1
-                      or data.get("simple_recommended_action")  # director buying
+        _raw_rec   = (simple.get("recommendation")              # TR-1 (single word)
+                      or data.get("simple_recommended_action")  # director buying (sentence)
                       or "")
+        rec        = _raw_rec.split()[0].lower() if _raw_rec else ""
     else:
         lens_type  = "regulatory_catalyst"
         strength   = data.get("signal_strength") or ""
