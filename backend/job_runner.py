@@ -296,6 +296,19 @@ REASON: [one sentence]"""
         company = self.universe_storage.get_company(ticker)
         company_profile = _build_company_profile(company)
 
+        # Store announcement metadata on the signals doc for UI display.
+        # Written once per filing (same rns_article_id for all transactions).
+        try:
+            self.db.collection("signals").document(rns_article_id).set({
+                "headline": announcement.headline or "",
+                "source_url": announcement.source_url or "",
+                "announcement_published_at": announcement.published_at.isoformat(),
+                "price_pence": job.get("price"),
+                "price_change": job.get("price_change"),
+            }, merge=True)
+        except Exception as e:
+            print(f"  [{ticker}] Could not store announcement metadata on signals doc: {e}")
+
         cfg = self._get_director_lens_config()
         skip_on_ignore = cfg.get("skip_agentic_on_ignore", True)
         min_consideration = cfg.get("agentic_min_consideration_gbp", 0)
