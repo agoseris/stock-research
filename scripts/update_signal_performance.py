@@ -568,6 +568,22 @@ def run(dry_run: bool, ticker_filter: str | None, debug: bool = False) -> None:
         ticker = (data.get("ticker") or "").upper()
         if ticker_filter and ticker != ticker_filter.upper():
             continue
+
+        if ticker_filter:
+            # Verbose trace for targeted debugging
+            investor_action = data.get("investor_action") or ""
+            simple_rec  = (data.get("simple_lens_result") or {}).get("recommendation") or ""
+            simple_act  = data.get("simple_recommended_action") or ""
+            sig_type    = data.get("signal_type") or ""
+            already_perf = doc.id in existing_perf
+            eligible    = _eligible_signal(data)
+            print(f"  doc={doc.id[:20]}  signal_type={sig_type}")
+            print(f"    investor_action={investor_action!r}")
+            print(f"    simple_lens_result.recommendation={simple_rec!r}")
+            print(f"    simple_recommended_action={simple_act!r}")
+            print(f"    already_in_performance={already_perf}")
+            print(f"    eligible={eligible}")
+
         if not _eligible_signal(data):
             continue
         stats["eligible"] += 1
