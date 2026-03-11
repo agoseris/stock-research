@@ -142,8 +142,9 @@ class FirestoreProvider(StorageProviderBase):
         """
         try:
             payload = dict(result)
-            payload["stored_at"] = self._now()
-            payload["expires_at"] = self._now() + timedelta(days=90)
+            now = datetime.now(timezone.utc)
+            payload["stored_at"] = now.isoformat()
+            payload["expires_at"] = now + timedelta(days=90)
             payload.setdefault("dismissed", False)
             self.db.collection(self.SIGNAL_RESULTS_COLLECTION).add(payload)
             return True

@@ -330,6 +330,36 @@ TR-1 notifications are already passing through the pipeline. A new lens would fi
 - Sequential upward crossings (same investor) → **Signal — Reinforced**
 - Downward crossing on a company in Signal — Active → **Signal — Mixed** or **Signal — Negative** depending on investor and magnitude
 
+#### Implementation Decisions (session 7, 10 Mar 2026)
+
+Architecture: **Option B — simple lens + one investor research layer.** Full 3-layer
+agentic treatment (as used by the director buying lens) is not warranted. Investor
+identity is the crux of the TR-1 signal; a single investor research step resolves it.
+
+**Classification:** `tr1_crossing` added as a **5th article type** in the existing
+Anthropic classification call (Claude Sonnet). Zero marginal LLM cost — the call
+already happens for every ingested article. TR-1 filings were previously classified
+as `administrative`; they now route to the TR-1 lens directly.
+
+**Models:**
+- Simple lens: Gemini Flash (free tier)
+- Investor research: Gemini Flash + native Google Search grounding
+
+Rationale for Gemini Flash on investor research: investor identity is an open-web
+lookup task, not a multi-step reasoning problem. Gemini's native Search grounding
+handles it in a single step with citation evidence. Claude's tool-use loop is not
+required.
+
+**Materiality gate:** same pattern as director lens — if simple lens returns "Ignore"
+or `trigger_investor_research=false`, `agentic_status="skipped"` and no further
+investigation. Configurable via Firestore (`app_config/tr1_lens_config`).
+
+**Signals collection:** `signal_type="tr1_crossing"` field distinguishes TR-1 signals
+from director buying signals within the shared `signals` collection.
+
+**UI:** deferred until signals are flowing. See `docs/design/tr1_lens_overview.md`
+for full architecture, implementation sequence, and card design.
+
 ---
 
 ### Lens 3: Company Share Buyback Momentum
@@ -504,3 +534,4 @@ Convergence detection acts as an *amplifier* of signal state transitions rather 
 |---------|------|---------|
 | 1 | 27 Feb 2026 | Initial catalogue — 5 lenses with feasibility tiers |
 | 2 | 27 Feb 2026 | Added Part A (State Model): signal state and position state as independent axes; notification priority matrix; deferred behaviour; mute vs. decline distinction; implementation notes. Updated all lenses with state model integration sections. |
+| 3 | 10 Mar 2026 | Lens 2 (TR-1): added implementation decisions from session 7 planning — Option B architecture, Gemini Flash + Search grounding, tr1_crossing as 5th classification type, materiality gate, signals collection routing. Full architecture in docs/design/tr1_lens_overview.md. |

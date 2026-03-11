@@ -1,6 +1,6 @@
 # Session Handover
-**Last updated:** 5 March 2026 (session 5)
-**App version:** 2.44
+**Last updated:** 10 March 2026 (session 7)
+**App version:** 2.50
 **Branch:** `master`
 
 ---
@@ -11,14 +11,118 @@ App running locally on WSL2 at `http://localhost:8501`.
 
 | Tab | Status | Notes |
 |---|---|---|
-| Signals | Working | **Phase 2c complete (v2.35); polished (v2.36–2.44).** Filter bar, grouped expandable sections (Urgent/Action/Monitor/No Action), compact cards with market cap + price, signal state badges with age, state-gated position controls (Act/Defer/Decline/Close/Dismiss), history toggle, urgency highlight for Acted+counter-signal. Declined signals hidden from default view. Headline links to source article. |
+| Signals | Working | Director Buying Lens section above regulatory catalyst signals. Cards show headline link, published datetime with time, market cap + price. Simple Lens and Agentic Briefing in full-width stacked expanders. |
 | Discovery | Working | Post-LLM discovery results — distinct from Ingest discovery candidates |
-| Universe | Working | Manual add and file import both confirmed end-to-end |
-| Ingest | Working | **Phase 1 complete (v2.31).** "Fetch from LSEG" button live. Three-index fetch: MCX (FTSE 250) + SMX (FTSE Small Cap) + AXX (FTSE AIM All-Share), each under 500 rows/day, merged + deduplicated on source_url. Excel upload retained as fallback. |
+| Universe | Working | Manual add and file import both confirmed end-to-end. 4-column stats (CH Matched removed). |
+| Ingest | Working | "Fetch from LSEG" button live. Three-index fetch: MCX + SMX + AXX. Source filter relaxed to accept all non-empty sources (EQS, PRN, GNW etc). |
 | Config | Working | Exclusion list editable; changes reflected on next parse |
 
-**Next steps:** All 13 director lens tools complete. Phase 3 — build the Director Lens Orchestrator.
-See `docs/design/director_lens_overview.md` for the synthesis layer specification.
+**Next steps:** TR-1 Significant Shareholder Accumulation lens.
+See `docs/design/tr1_lens_overview.md` for architecture and build order.
+
+---
+
+## Session 7 — TR-1 Design + Operational Improvements (10 March 2026)
+
+### TR-1 Lens — Design Decisions
+
+Architecture and build order recorded in `docs/design/tr1_lens_overview.md`.
+`LENS_WORKSHOP_CANDIDATES_v2.md` Lens 2 section updated with implementation notes.
+
+Key decisions:
+- **Option B selected:** simple lens + one investor research layer. No 3-layer agentic treatment.
+- **Gemini Flash (free tier)** for both the simple lens and investor research layer.
+- **Native Google Search grounding** used for investor research (Gemini native capability — cleaner than Claude tool-use loop for this task).
+- **`tr1_crossing` added as 5th article type** to the existing Anthropic classification prompt. Rationale: classification call already paid for on every universe announcement; adding the new route extracts value at zero marginal cost.
+- TR-1 signals stored in the existing `signals` collection with `signal_type="tr1_crossing"`.
+- UI presentation deferred until signals are flowing.
+
+### Director Lens Card UI Improvements (v2.50)
+
+| Issue | Fix |
+|---|---|
+| Headline not linked | Headline shown with clickable link to source URL |
+| Date showed date only | Now shows `announcement_published_at` (datetime with time from LSEG); falls back to transaction date |
+| No price shown | Price and change shown alongside market cap |
+| Simple Lens + Agentic Briefing in narrow side-by-side columns | Moved to full-width stacked expanders; action buttons in their own row above |
+
+Backend (`job_runner.py`): on PDMR flow, stores `headline`, `source_url`, `announcement_published_at`, `price_pence`, `price_change` on the signals doc via merge write before the transaction loop.
+
+### Materiality Gate
+
+`app_config/director_lens_config` Firestore document controls two independent gates:
+- `skip_agentic_on_ignore` (bool, default `True`): skip agentic investigation when simple lens recommends Ignore
+- `agentic_min_consideration_gbp` (number, default `0`): skip when total consideration below floor
+
+Current live config: `agentic_min_consideration_gbp = 10000`. Gate applied in `_run_pdmr_flow` after simple lens returns; sets `agentic_status="skipped"` to override the "pending" written by `persist_simple_lens_result`.
+
+### Classification Bug Fixes
+
+| Bug | Fix |
+|---|---|
+| JSON truncation on large multi-director filings (BUR) | `max_tokens` increased 2000 → 4096 → 8192 (Sonnet 4.6 ceiling) in `call_classification` |
+| Failed classification fell through to regulatory catalyst lens | `extraction_status="failed"` gate added in `job_runner.py` before regulatory lens call |
+| Classification exception also fell through | Exception path now completes job with `note="classification_failed"` and returns |
+| Mixed-type filings (purchases + vestings) misextracted | Prompt updated with explicit MIXED-TYPE FILINGS section and priority rules |
+
+### Companies House Integration Retired
+
+- `pipeline.py`: CH news provider removed. No active autonomous ingest providers. Pipeline run still executes decay checks.
+- `backend/job_runner.py`: CH lookup removed from universe admit and bulk import flows.
+- `backend/abstractions.py`: `companies_house_number` and `companies_house_confidence` fields removed from `Announcement` and `UniverseCompany` dataclasses.
+- `backend/import_universe_csv.py`: entire CH lookup block removed. Import now runs in seconds (was 8–9 minutes).
+- Frontend: "CH Matched" metric removed from Universe tab stats bar.
+
+### Prompt Caching
+
+Implemented in `utilities/orchestrator/layer_runner.py`:
+- Initial user message marked `cache_control: ephemeral`
+- Last tool definition marked `cache_control: ephemeral`
+- Token usage logged per iteration including `cache_creation_input_tokens` / `cache_read_input_tokens`
+- Confirmed working for Sonnet models (L2: ~48% input cost reduction, L3: ~41%)
+- L1 (Haiku 4.5) not caching — deferred, cost impact minimal
+
+### Orchestrator Automation
+
+`scripts/run_orchestrator.py` now runs as a cron job (local WSL2 machine):
+```
+50 7-19 * * 1-5  cd /home/agoseris/projects/stock-research && scripts/venv/bin/python3 scripts/run_orchestrator.py --once >> scripts/orchestrator.log 2>&1
+```
+20-minute offset after `auto_ingest.py` (07:30) ensures classification jobs complete before orchestrator polls. Entry added to `scripts/crontab_example.txt`.
+
+### Firestore TTL Policies
+
+`expires_at` field now written by all persistence paths. TTL policies needed in GCP Firestore console (field: `expires_at`) on:
+
+| Collection | TTL | Status |
+|---|---|---|
+| `pending_jobs` | 7 days | Backfill complete (520 docs). Policy needed. |
+| `announcements` | by article_type (14d/90d/none) | Backfill script: `scripts/backfill_announcements_ttl.py --expire-legacy`. Policy needed. |
+| `pdmr_transactions` | 730 days | Written by new code. Policy needed. |
+| `company_news_summaries` | 90 days | Written by new code. Policy needed. |
+| `signals` | 730 days | Written by new code. Policy needed. |
+
+---
+
+## Session 6 — Director Lens End-to-End + Pipeline Fixes (9 March 2026)
+
+### Director Lens — End-to-End Operational
+
+First full run completed (AFL — Artemis UK Future Leaders). Pipeline flow:
+
+```
+LSEG Ingest → job_runner classifies (Anthropic Sonnet)
+  → pdmr_transaction + open_market → simple lens (Haiku)
+  → signals doc agentic_status="pending"
+  → run_orchestrator.py (local, --once or cron)
+  → 3-layer investigation (L1 Haiku, L2 Haiku/Sonnet, L3 Sonnet)
+  → synthesis (Sonnet)
+  → agentic_status="complete"
+```
+
+### Source Filter Relaxed (v2.48)
+
+`_filter_announcement_rows` in `parse_helpers.py` now accepts any non-empty source (EQS, PRN, GNW etc.), not RNS-only. PDMR filings come from multiple wires.
 
 ---
 
