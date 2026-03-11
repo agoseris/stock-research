@@ -60,6 +60,8 @@ def _director_rec_badge(rec: str, agentic_status: str) -> str:
     elif agentic_status == "failed":
         css = "badge badge-director-ignore"
         label = "Agentic failed"
+    elif agentic_status == "skipped":
+        return ""  # simple lens decided investigation not warranted
     else:
         css = "badge badge-director-pending"
         label = "Agentic pending"
