@@ -187,6 +187,8 @@ def _transform_signal_result(doc_id: str, data: dict, now: datetime) -> tuple[st
     source_rel_raw = _extract_blob_field(analysis, "SOURCE_RELIABILITY")
     outcome_raw = _extract_blob_field(analysis, "OUTCOME_PROBABILITY")
 
+    market_mispricing_raw = _extract_blob_field(analysis, "MARKET_MISPRICING")
+
     if not action_raw:
         warnings.append("RECOMMENDED_ACTION not found in llm_analysis blob")
     if not summary_raw:
@@ -236,15 +238,15 @@ def _transform_signal_result(doc_id: str, data: dict, now: datetime) -> tuple[st
         "price_pence": data.get("price_pence"),
         "price_change": data.get("price_change"),
         "market_cap_gbp": data.get("market_cap_gbp"),
-        # Lens-specific extension
+        # Lens-specific extension — all blob fields parsed; raw blob not retained
         "lens_data": {
-            "llm_analysis": analysis,
             "analysed_at": _coerce_to_isostring(data.get("analysed_at")),
             "lens": data.get("lens", "regulatory_catalyst"),
             "queue": data.get("queue"),
             "source": data.get("source"),
             "source_reliability": source_rel_raw,
             "outcome_probability": outcome_raw,
+            "market_mispricing": market_mispricing_raw,
         },
         # Migration provenance
         "_migration_source": "signal_results",
