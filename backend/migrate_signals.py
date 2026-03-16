@@ -115,13 +115,35 @@ def _int_strength_to_unified(val) -> str:
         return "noise"
 
 
-def _classify_catalyst_strength(action: str, confidence: str) -> str:
-    """Derive unified signal_strength from regulatory catalyst RECOMMENDED_ACTION + CONFIDENCE."""
+def _parse_relevance_score(relevance_raw: str) -> Optional[int]:
+    """Parse RELEVANCE field value (e.g. '8/10', '7/10') to an integer, or None."""
+    import re
+    if not relevance_raw:
+        return None
+    m = re.search(r'(\d+)\s*/\s*10', relevance_raw)
+    if m:
+        return int(m.group(1))
+    # Fallback: bare integer
+    m = re.search(r'^\s*(\d+)\s*$', relevance_raw)
+    if m:
+        v = int(m.group(1))
+        return v if 0 <= v <= 10 else None
+    return None
+
+
+def _classify_catalyst_strength(action: str, relevance_raw: str) -> str:
+    """
+    Derive unified signal_strength from regulatory catalyst fields.
+
+    Primary: RELEVANCE score (0–10) mapped via _int_strength_to_unified.
+    Fallback: RECOMMENDED_ACTION keyword when score cannot be parsed.
+    """
+    score = _parse_relevance_score(relevance_raw)
+    if score is not None:
+        return _int_strength_to_unified(score)
+    # Fallback: derive from action alone
     a = (action or "").lower()
-    c = (confidence or "").lower()
     if a == "yes":
-        if any(kw in c for kw in ("very high", "high", "strong")):
-            return "strong"
         return "moderate"
     if a == "monitor":
         return "weak"
@@ -182,20 +204,21 @@ def _transform_signal_result(doc_id: str, data: dict, now: datetime) -> tuple[st
     action_raw = _extract_blob_field(analysis, "RECOMMENDED_ACTION")
     confidence_raw = _extract_blob_field(analysis, "CONFIDENCE_SIGNAL")
     summary_raw = _extract_blob_field(analysis, "SUMMARY")
-    relevance_raw = _extract_blob_field(analysis, "RELEVANCE")
+    relevance_raw = _extract_blob_field(analysis, "RELEVANCE")        # e.g. "8/10"
     signal_type_raw = _extract_blob_field(analysis, "SIGNAL_TYPE") or "regulatory_catalyst"
     source_rel_raw = _extract_blob_field(analysis, "SOURCE_RELIABILITY")
-    outcome_raw = _extract_blob_field(analysis, "OUTCOME_PROBABILITY")
-
+    outcome_raw = _extract_blob_field(analysis, "OUTCOME_PROBABILITY")  # rationale source
     market_mispricing_raw = _extract_blob_field(analysis, "MARKET_MISPRICING")
 
     if not action_raw:
         warnings.append("RECOMMENDED_ACTION not found in llm_analysis blob")
     if not summary_raw:
         warnings.append("SUMMARY not found in llm_analysis blob")
+    if not relevance_raw:
+        warnings.append("RELEVANCE score not found — signal_strength will fall back to action-based")
 
     recommendation = _map_catalyst_recommendation(action_raw)
-    signal_strength = _classify_catalyst_strength(action_raw, confidence_raw)
+    signal_strength = _classify_catalyst_strength(action_raw, relevance_raw)
 
     # Document ID: fingerprint of source_url or headline
     key_text = data.get("source_url") or data.get("headline", "")
@@ -226,7 +249,7 @@ def _transform_signal_result(doc_id: str, data: dict, now: datetime) -> tuple[st
         "recommendation": recommendation,
         # Narrative fields
         "summary": summary_raw,
-        "rationale": relevance_raw,
+        "rationale": outcome_raw,    # OUTCOME_PROBABILITY: why the recommendation is made
         "limitations": "",           # not surfaced in this lens prompt format
         "confidence_signal": confidence_raw,
         # Lifecycle
@@ -244,8 +267,8 @@ def _transform_signal_result(doc_id: str, data: dict, now: datetime) -> tuple[st
             "lens": data.get("lens", "regulatory_catalyst"),
             "queue": data.get("queue"),
             "source": data.get("source"),
+            "relevance_score": relevance_raw,       # e.g. "8/10" — numeric relevance score
             "source_reliability": source_rel_raw,
-            "outcome_probability": outcome_raw,
             "market_mispricing": market_mispricing_raw,
         },
         # Migration provenance
