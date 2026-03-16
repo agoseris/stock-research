@@ -1,0 +1,29 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment & secrets
+gcp-credentials.json
+*credentials*.json
+.env
+.DS_Store
+
+# Scratch files
+*.save
+
+# Runtime
+logs/
+streamlit.pid
+frontend/lseg_cookies.json
+scripts/*log
+scripts/venv
+frontend/venv
+
+# Data
+*.xlsx
+*.csv
+*.out
+*.old
