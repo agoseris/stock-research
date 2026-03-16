@@ -68,6 +68,18 @@ from utilities.orchestrator.layer_runner import (
 from utilities.orchestrator.synthesis import run_synthesis
 from utilities.orchestrator.lens_tr1_investor_research import run_tr1_investor_research
 
+# TelegramNotifier is in backend/ — add it to sys.path if not already present
+_BACKEND_DIR = str(_REPO_ROOT / "backend")
+if _BACKEND_DIR not in sys.path:
+    sys.path.insert(0, _BACKEND_DIR)
+
+try:
+    from telegram_notifier import TelegramNotifier as _TelegramNotifier
+    _notifier = _TelegramNotifier()
+except Exception as _notifier_err:
+    _notifier = None
+    logger.warning("Telegram notifier unavailable: %s", _notifier_err)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -228,13 +240,33 @@ def process_tr1_signal(
     if result.get("_error"):
         logger.error("[%s] Investor research failed: %s", ticker, result["_error"])
     else:
+        conviction = result.get("conviction_assessment", "")
+        confidence = result.get("confidence", "")
         logger.info(
             "[%s] Investor research complete — type=%s conviction=%s confidence=%s",
             ticker,
             result.get("notifier_type"),
-            result.get("conviction_assessment"),
-            result.get("confidence"),
+            conviction,
+            confidence,
         )
+        # Telegram notification: conviction_likely + high/medium confidence = act threshold
+        if (
+            _notifier is not None
+            and conviction == "conviction_likely"
+            and confidence in ("high", "medium")
+        ):
+            try:
+                tr1_payload = {
+                    **signal_data,
+                    "investor_research_result": result,
+                }
+                _notifier.send(
+                    _notifier.format_tr1_signal(tr1_payload),
+                    priority="high",
+                )
+                logger.info("[%s] Telegram TR-1 agentic notification sent.", ticker)
+            except Exception as _notify_err:
+                logger.warning("[%s] TR-1 Telegram notification failed: %s", ticker, _notify_err)
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +378,26 @@ def process_signal(
     else:
         rec = synthesis_result.get("recommendation", "?")
         logger.info("[%s] Synthesis complete — recommendation: %s", ticker, rec)
+
+        # Telegram notification — 'act' threshold only ("Investigate further")
+        _r = (rec or "").strip().lower()
+        if _notifier is not None and _r in ("investigate further", "investigate"):
+            try:
+                director_payload = {
+                    **signal_data,
+                    # Enrich with agentic recommendation fields for notifier
+                    "simple_recommended_action": rec,
+                    "simple_summary": synthesis_result.get("recommendation_justification", ""),
+                }
+                _notifier.send(
+                    _notifier.format_director_signal(director_payload),
+                    priority="high",
+                )
+                logger.info("[%s] Telegram Director agentic notification sent.", ticker)
+            except Exception as _notify_err:
+                logger.warning(
+                    "[%s] Director Telegram notification failed: %s", ticker, _notify_err
+                )
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,8 @@ from utilities.orchestrator.config import (
     SIGNAL_TTL_DAYS,
 )
 
+SIGNALS_UNIFIED_COLLECTION = "signals_unified"
+
 # ---------------------------------------------------------------------------
 # Firestore client — lazy singleton
 # ---------------------------------------------------------------------------
@@ -251,6 +253,153 @@ def persist_news_summary(
 
 
 # ---------------------------------------------------------------------------
+# Unified schema helpers
+# ---------------------------------------------------------------------------
+
+def _int_strength_to_unified(val) -> str:
+    """Map integer 1–10 strength score to unified string scale."""
+    if val is None:
+        return "noise"
+    try:
+        v = int(val)
+        if v >= 9:
+            return "strong"
+        if v >= 7:
+            return "substantial"
+        if v >= 5:
+            return "moderate"
+        if v >= 3:
+            return "weak"
+        return "noise"
+    except (TypeError, ValueError):
+        return "noise"
+
+
+def _map_director_recommendation(rec: str) -> str:
+    """Map Director simple / synthesis recommendation to unified value."""
+    r = (rec or "").strip().lower()
+    if r in ("investigate further", "investigate"):
+        return "act"
+    if r == "monitor":
+        return "monitor"
+    return "ignore"
+
+
+def _map_tr1_recommendation(rec: str) -> str:
+    """Map TR-1 simple lens recommendation to unified value."""
+    r = (rec or "").strip().lower()
+    if r == "investigate":
+        return "act"
+    if r == "monitor":
+        return "monitor"
+    return "ignore"
+
+
+def _build_unified_director_doc(
+    rns_article_id: str,
+    ticker: str,
+    company_name: str,
+    published_at,
+    signal_type: str,
+    simple_result: dict,
+) -> dict:
+    """
+    Build a signals_unified document from Director simple lens output.
+
+    Called by persist_simple_lens_result to dual-write to signals_unified.
+    The agentic fields are written later by persist_synthesis_result.
+    """
+    strength_int = simple_result.get("SIGNAL_STRENGTH")
+    signal_strength = _int_strength_to_unified(strength_int)
+    recommendation = _map_director_recommendation(
+        simple_result.get("RECOMMENDED_ACTION", "")
+    )
+
+    return {
+        "ticker": ticker,
+        "company_name": company_name,
+        "lens_id": "director_purchasing",
+        "signal_type": signal_type,
+        "stored_at": datetime.now(tz=timezone.utc),
+        "published_at": published_at,
+        "signal_strength": signal_strength,
+        "recommendation": recommendation,
+        "summary": simple_result.get("SUMMARY", ""),
+        "rationale": simple_result.get("SUMMARY", ""),   # best available at simple stage
+        "limitations": simple_result.get("LIMITATIONS", ""),
+        "confidence_signal": "",
+        "dismissed": False,
+        "agentic_status": "pending",
+        "expires_at": _expires_at(SIGNAL_TTL_DAYS),
+        "lens_data": {
+            "simple_transaction_nature": simple_result.get("TRANSACTION_NATURE"),
+            "simple_position_change_pct": simple_result.get("POSITION_CHANGE_PCT"),
+            "simple_signal_strength_raw": strength_int,
+            "simple_signal_direction": simple_result.get("SIGNAL_DIRECTION"),
+            "simple_commitment_size": simple_result.get("COMMITMENT_SIZE"),
+            "simple_holding_significance": simple_result.get("HOLDING_SIGNIFICANCE"),
+            "simple_reporting_lag_assessment": simple_result.get("REPORTING_LAG_ASSESSMENT"),
+        },
+    }
+
+
+def _build_unified_tr1_doc(
+    rns_article_id: str,
+    ticker: str,
+    company_name: str,
+    published_at,
+    tr1_data: dict,
+    simple_result: dict,
+) -> dict:
+    """
+    Build a signals_unified document from TR-1 simple lens output.
+
+    Called by persist_tr1_signal to dual-write to signals_unified.
+    The investor_research fields are written later by persist_tr1_investor_research.
+    """
+    signal_strength = simple_result.get("signal_strength", "noise")
+    # Validate against known strength values
+    _VALID = {"strong", "moderate", "weak", "noise", "negative", "substantial"}
+    if signal_strength not in _VALID:
+        signal_strength = "noise"
+
+    recommendation = _map_tr1_recommendation(simple_result.get("recommendation", ""))
+
+    tr1_extraction_fields = {
+        "notifier_name": tr1_data.get("notifier_name"),
+        "issuer_name": tr1_data.get("issuer_name"),
+        "direction": tr1_data.get("direction"),
+        "old_holding_pct": tr1_data.get("old_holding_pct"),
+        "new_holding_pct": tr1_data.get("new_holding_pct"),
+        "threshold_crossed": tr1_data.get("threshold_crossed"),
+        "nature_of_holding": tr1_data.get("nature_of_holding"),
+        "crossing_date": tr1_data.get("crossing_date"),
+    }
+
+    return {
+        "ticker": ticker,
+        "company_name": company_name,
+        "lens_id": "tr1_accumulation",
+        "signal_type": "tr1_crossing",
+        "stored_at": datetime.now(tz=timezone.utc),
+        "published_at": published_at,
+        "signal_strength": signal_strength,
+        "recommendation": recommendation,
+        "summary": simple_result.get("rationale", ""),
+        "rationale": simple_result.get("rationale", ""),
+        "limitations": simple_result.get("limitations", ""),
+        "confidence_signal": "",
+        "dismissed": False,
+        "agentic_status": "pending",
+        "expires_at": _expires_at(SIGNAL_TTL_DAYS),
+        "lens_data": {
+            **tr1_extraction_fields,
+            "simple_lens_result": simple_result,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # TR-1: signals collection — TR-1 signal document
 # ---------------------------------------------------------------------------
 
@@ -320,6 +469,26 @@ def persist_tr1_signal(
 
     db.collection("signals").document(rns_article_id).set(doc, merge=True)
 
+    # Dual-write to signals_unified (new unified schema)
+    try:
+        unified_doc = _build_unified_tr1_doc(
+            rns_article_id=rns_article_id,
+            ticker=ticker,
+            company_name=company_name,
+            published_at=published_at,
+            tr1_data=tr1_data,
+            simple_result=simple_result,
+        )
+        db.collection(SIGNALS_UNIFIED_COLLECTION).document(rns_article_id).set(
+            unified_doc, merge=True
+        )
+    except Exception as e:
+        # Dual-write failure must never crash the primary write path
+        import logging
+        logging.getLogger(__name__).warning(
+            "signals_unified dual-write failed for TR-1 %s: %s", rns_article_id[:16], e
+        )
+
 
 def persist_tr1_investor_research(
     rns_article_id: str,
@@ -348,16 +517,41 @@ def persist_tr1_investor_research(
 
     status = "failed" if research_result.get("_error") else "complete"
 
-    db.collection("signals").document(rns_article_id).set(
-        {
-            "investor_research": research_result,
-            "investor_research_completed_at": datetime.now(tz=timezone.utc),
-            "investor_research_token_usage": token_usage,
+    completed_at = datetime.now(tz=timezone.utc)
+    primary_update = {
+        "investor_research": research_result,
+        "investor_research_completed_at": completed_at,
+        "investor_research_token_usage": token_usage,
+        "agentic_status": status,
+        "agentic_completed_at": completed_at,
+    }
+    db.collection("signals").document(rns_article_id).set(primary_update, merge=True)
+
+    # Dual-write to signals_unified: update rationale, confidence, and agentic fields
+    try:
+        unified_update = {
             "agentic_status": status,
-            "agentic_completed_at": datetime.now(tz=timezone.utc),
-        },
-        merge=True,
-    )
+            "lens_data.investor_research": research_result,
+            "lens_data.investor_research_completed_at": completed_at,
+            "lens_data.investor_research_token_usage": token_usage,
+            "lens_data.agentic_completed_at": completed_at,
+        }
+        if not research_result.get("_error"):
+            key_reasoning = research_result.get("key_reasoning", "")
+            confidence = research_result.get("confidence", "")
+            if key_reasoning:
+                unified_update["rationale"] = key_reasoning
+            if confidence:
+                unified_update["confidence_signal"] = confidence
+        db.collection(SIGNALS_UNIFIED_COLLECTION).document(rns_article_id).set(
+            unified_update, merge=True
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "signals_unified dual-write failed for TR-1 investor research %s: %s",
+            rns_article_id[:16], e
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +617,27 @@ def persist_simple_lens_result(
     }
 
     db.collection("signals").document(rns_article_id).set(doc, merge=True)
+
+    # Dual-write to signals_unified (new unified schema)
+    try:
+        unified_doc = _build_unified_director_doc(
+            rns_article_id=rns_article_id,
+            ticker=ticker,
+            company_name=company_name,
+            published_at=published_at,
+            signal_type=signal_type,
+            simple_result=simple_result,
+        )
+        db.collection(SIGNALS_UNIFIED_COLLECTION).document(rns_article_id).set(
+            unified_doc, merge=True
+        )
+    except Exception as e:
+        # Dual-write failure must never crash the primary write path
+        import logging
+        logging.getLogger(__name__).warning(
+            "signals_unified dual-write failed for director signal %s: %s",
+            rns_article_id[:16], e
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -534,3 +749,41 @@ def persist_synthesis_result(
         }
 
     db.collection("signals").document(rns_article_id).set(update, merge=True)
+
+    # Dual-write to signals_unified: promote agentic recommendation + rationale
+    try:
+        if "_error" in synthesis_result:
+            unified_update = {
+                "agentic_status": "failed",
+            }
+        else:
+            agentic_rec_raw = synthesis_result.get("recommendation", "")
+            # Map synthesis recommendation to unified values
+            _r = (agentic_rec_raw or "").strip().lower()
+            if _r in ("investigate further", "investigate"):
+                unified_recommendation = "act"
+            elif _r == "monitor":
+                unified_recommendation = "monitor"
+            else:
+                unified_recommendation = "ignore"
+
+            unified_update = {
+                "agentic_status": "complete",
+                "recommendation": unified_recommendation,  # override simple lens recommendation
+                "rationale": synthesis_result.get("recommendation_justification", ""),
+                "limitations": synthesis_result.get("limitations", ""),
+                "lens_data.agentic_recommendation": agentic_rec_raw,
+                "lens_data.agentic_justification": synthesis_result.get("recommendation_justification"),
+                "lens_data.agentic_limitations": synthesis_result.get("limitations"),
+                "lens_data.agentic_synthesis_full": synthesis_result,
+                "lens_data.agentic_token_usage": token_usage,
+            }
+        db.collection(SIGNALS_UNIFIED_COLLECTION).document(rns_article_id).set(
+            unified_update, merge=True
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "signals_unified dual-write failed for synthesis %s: %s",
+            rns_article_id[:16], e
+        )

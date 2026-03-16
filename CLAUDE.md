@@ -1,31 +1,47 @@
-# CLAUDE.md
+# CLAUDE.md — Stock Research Tool
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-# Stock Research Tool — Claude Code Context
+## Standards Reference
+
+This project follows the universal principles defined in the standards
+repository. Before working in this codebase, read:
+
+- `standards/CLAUDE.md` — universal principles
+- `standards/principles/architecture.md` — abstraction and dependency rules
+- `standards/principles/authentication.md` — credential handling
+- `standards/principles/observability.md` — logging and auditability
+- `standards/principles/deployment.md` — deployment workflow
+- `standards/principles/data-models.md` — Firestore conventions
+- `standards/principles/mcp.md` — if working on the MCP satellite project
+
+Any principle not documented here defers to the standards repository.
+Local exceptions to standards are documented below with explicit rationale.
+
+---
 
 ## What This Project Is
 
-An AI-assisted stock research tool for LSE small-cap investing (Main Market and AIM).
-The system autonomously ingests financial news and regulatory announcements, filters
-them against an investment thesis, and uses an LLM to assess whether they represent
-meaningful catalyst opportunities. Results are delivered via Telegram and a Streamlit
-interface.
+An AI-assisted stock research tool for LSE small-cap investing (Main Market
+and AIM). The system autonomously ingests financial news and regulatory
+announcements, filters them against an investment thesis, and uses an LLM
+to assess whether they represent meaningful catalyst opportunities. Results
+are delivered via Telegram and a Streamlit interface.
 
-**Overarching thesis:** identify LSE small-caps where informed or knowledgeable parties
-have expressed confidence in an upcoming increase in value — through their actions, not
-their words.
+**Overarching thesis:** identify LSE small-caps where informed or
+knowledgeable parties have expressed confidence in an upcoming increase in
+value — through their actions, not their words.
 
 ---
 
 ## Architecture: Six Abstractions — Non-Negotiable
 
-All components communicate through abstract base class interfaces. Concrete providers
-are instantiated **once at the entry point** and injected. Never instantiate a concrete
-provider inside pipeline logic, the UI layer, or another provider.
+All components communicate through abstract base class interfaces. Concrete
+providers are instantiated once at the entry point and injected. See
+`standards/principles/architecture.md` for the universal rule; this table
+is the project-specific implementation.
 
 | # | Abstraction | Implementation | Purpose |
 |---|---|---|---|
-| 1 | `AnnouncementProviderBase` | `CompaniesHouseProvider` (active), `LSEGExcelProvider` (active) | News and filing ingestion |
+| 1 | `AnnouncementProviderBase` | `CompaniesHouseProvider`, `LSEGExcelProvider` | News and filing ingestion |
 | 2 | `LLMProviderBase` | `GeminiProvider` | Analysis and reasoning |
 | 3 | `NotificationProviderBase` | `TelegramNotifier` | Alert dispatch |
 | 4 | `StorageProviderBase` | `FirestoreProvider` | Signal/discovery results and deduplication |
@@ -36,8 +52,6 @@ provider inside pipeline logic, the UI layer, or another provider.
 
 ## Project File Structure
 
-Monorepo with two top-level directories. All new universe pipeline code goes in `backend/`.
-
 ```
 ./
 ├── CLAUDE.md
@@ -45,64 +59,69 @@ Monorepo with two top-level directories. All new universe pipeline code goes in 
 ├── SOBER_ASSESSMENT_v1.md            # Post-PoC evaluation — gaps and upgrade path
 ├── .gitignore
 ├── backend/
-│   ├── abstractions.py               # All six abstract base classes + dataclasses (incl. signal/position state fields)
+│   ├── abstractions.py               # All six abstract base classes + dataclasses
 │   ├── pipeline.py                   # Core signal pipeline orchestration — daily cron entry point
 │   ├── job_runner.py                 # Interactive job queue worker — polls Firestore pending_jobs
-│   ├── signal_state.py               # Pure state transition engine — classify_signal_strength, compute_signal_transition, compute_decay_transitions
+│   ├── signal_state.py               # Pure state transition engine
 │   ├── lseg_excel_provider.py        # AnnouncementProviderBase — LSEG Excel ingestion
 │   ├── import_universe_csv.py        # Manual universe import: CSV → CH lookup → Firestore
-│   ├── lens_base_filters.py          # Shared universe pre-filter (passes_universe_filter)
+│   ├── lens_base_filters.py          # Shared universe pre-filter
 │   ├── lens_regulatory_catalyst.py   # Strategy Lens: regulatory/planning catalysts
-│   ├── storage_firestore.py          # StorageProviderBase implementation (Firestore)
-│   ├── storage_firestore_universe.py # UniverseStorageProviderBase implementation (Firestore) — incl. signal/position state methods
+│   ├── storage_firestore.py          # StorageProviderBase implementation
+│   ├── storage_firestore_universe.py # UniverseStorageProviderBase implementation
 │   ├── llm_gemini.py                 # LLMProviderBase implementation
 │   ├── telegram_notifier.py          # NotificationProviderBase implementation
 │   ├── companies_house_connector.py  # AnnouncementProviderBase — CH filing ingestion
 │   ├── systemd/
 │   │   └── job_runner.service        # systemd unit for always-on VM operation
-│   ├── requirements.txt              # Python dependencies
+│   ├── requirements.txt
 │   └── .env                          # API keys — never commit, VM only
 ├── frontend/
-│   ├── app.py                        # Streamlit interface — five tabs: Signals, Discovery, Universe, Ingest, Config
-│   ├── constants.py                  # EMOJI_MUTE, config keys, default lists, outcome styles
-│   ├── ui_helpers.py                 # parse_analysis, badges, format_timestamp
-│   ├── parse_helpers.py              # _parse_lseg_excel, _parse_universe_csv, _compute_universe_delta, _filter_announcement_rows
-│   ├── firestore_helpers.py          # All Firestore functions (get_db, cached queries, writes)
-│   ├── lseg_scraper.py               # Playwright scraper — fetch_announcement_body, fetch_announcement_index (three-index: MCX/SMX/AXX)
-│   └── requirements.txt              # Streamlit Community Cloud dependencies
+│   ├── app.py                        # Streamlit interface — five tabs
+│   ├── constants.py
+│   ├── ui_helpers.py
+│   ├── parse_helpers.py
+│   ├── firestore_helpers.py
+│   ├── lseg_scraper.py
+│   └── requirements.txt
 └── docs/
-    ├── AIM_data_complete_*.csv        # AIM universe source (date-versioned)
-    ├── FTSE_AllShare_complete_*.csv   # FTSE All-Share universe source (date-versioned)
-    └── LSEG_news_capture.xlsx         # Sample LSEG export (62 rows, 23 Feb 2026)
+    ├── AIM_data_complete_*.csv
+    ├── FTSE_AllShare_complete_*.csv
+    └── LSEG_news_capture.xlsx
 ```
 
-**Rule:** never place backend logic in `frontend/` and never import from `backend/` inside `frontend/`. The Streamlit interface communicates with the backend exclusively via Firestore.
+**Rule:** never place backend logic in `frontend/`. The Streamlit interface
+communicates with the backend exclusively via Firestore. No backend imports
+in frontend code.
 
 ---
 
 ## Infrastructure
 
-- **Platform:** Google Cloud Platform (GCP)
-- **VM:** e2-micro, always-free tier, Debian 6.1.162-1, user `danjmorris`
+- **Platform:** GCP, europe-west2
+- **VM:** e2-micro, always-free tier, Debian, user `danjmorris`
 - **Storage:** Cloud Firestore, Native mode, europe-west2, default database
-- **LLM:** Gemini API free tier (`gemini-2.0-flash`, `google-genai` package)
+- **LLM:** Gemini API (`gemini-2.0-flash`, `google-genai` package)
 - **Notifications:** Telegram (`python-telegram-bot`)
-- **Interface:** Streamlit — deployable to Streamlit Community Cloud; runs locally on Windows 11 WSL2 (Ubuntu) for development. Reads/writes Firestore directly.
+- **Interface:** Streamlit — runs locally (WSL2/macOS) for development
 
 ### Firestore Collections
 
 | Collection | Purpose |
 |---|---|
-| `announcements` | SHA-256 headline fingerprints for cross-run deduplication |
+| `announcements` | SHA-256 headline fingerprints for deduplication |
 | `signal_results` | Signal queue LLM analysis results |
 | `discovery_results` | Discovery queue LLM analysis results |
-| `universe_companies` | One document per company, keyed by `ticker_lse`; carries `signal_state`, `position_state` and related timestamp fields |
-| `universe_companies/{ticker}/signal_history` | Subcollection — one doc per signal state transition (timestamp, previous/new state, trigger, lens, strength, confidence) |
-| `universe_companies/{ticker}/position_history` | Subcollection — one doc per position state change (timestamp, previous/new state, reason) |
+| `universe_companies` | One document per company, keyed by `ticker_lse` |
+| `universe_companies/{ticker}/signal_history` | Signal state transition history |
+| `universe_companies/{ticker}/position_history` | Position state change history |
 | `universe_refresh_log` | One document per pipeline refresh run |
-| `pending_jobs` | Interactive ingestion job queue — written by UI, consumed by job_runner |
-| `app_config/lseg_filters` | Exclusion lists — `excluded_announcement_types`, `excluded_company_keywords`; seeded from defaults on first app load, editable live via Sidebar → Filtration Rules |
-| `app_config/signal_config` | Signal decay window config — seeded on first call with defaults (`_DEFAULT_SIGNAL_CONFIG` in `storage_firestore_universe.py`); editable in Firestore |
+| `pending_jobs` | Interactive ingestion job queue |
+| `app_config/lseg_filters` | Exclusion lists — editable live via UI |
+| `app_config/signal_config` | Signal decay window config |
+
+**Note:** `dismissed + stored_at` query requires a composite index.
+`app.py` handles the missing index error gracefully with a fallback.
 
 ---
 
@@ -116,12 +135,17 @@ TELEGRAM_CHAT_ID=
 GOOGLE_APPLICATION_CREDENTIALS=/home/danjmorris/stock-research/backend/gcp-credentials.json
 ```
 
+**Local exception — key file on VM:** the VM currently uses a service
+account JSON key file referenced via `GOOGLE_APPLICATION_CREDENTIALS`.
+New development environments (macOS) use keyless ADC instead. The VM
+will be migrated to keyless authentication when next revisited.
+See `standards/principles/authentication.md` for the preferred approach.
+
 ---
 
 ## Deployment Workflow
 
-**Always:** local edit → commit → push to GitHub → VM pulls from GitHub.
-GitHub is always the intermediary. Never push directly from local to VM.
+GitHub is always the intermediary. See `standards/principles/deployment.md`.
 
 ```bash
 # Deploy alias (defined in WSL ~/.bashrc)
@@ -135,216 +159,73 @@ cd ~/stock-research && source backend/venv/bin/activate
 
 ---
 
-## Frontend Version Number — Mandatory Rule
+## Frontend Version Number
 
-The `VERSION` constant in `frontend/app.py` (line ~23) **must be incremented on every
-edit to that file.** Use semantic patch bumping: `1.0` → `1.1` → `1.2` etc.
-When the major workflow changes significantly, bump the minor version: `1.9` → `2.0`.
-
-This rule exists so the deployed Streamlit UI always reflects the exact code version,
-making it immediately obvious whether a deploy has taken effect.
+The `VERSION` constant in `frontend/app.py` (line ~23) must be incremented
+on every edit to that file. Patch bumping: `1.0` → `1.1`. Minor version
+on significant workflow changes: `1.9` → `2.0`.
 
 ---
 
-## Key Design Principles
+## Signal and Position State Model
 
-1. **Anti-bias:** no implicit preference learning. All adaptation is explicit,
-   time-bounded, and user-initiated.
+Two-axis state model: signal state (system-managed) and position state
+(human-managed).
 
-2. **Auditability:** the suppression log records everything filtered out.
-   The user can always see what was suppressed and why.
+Signal states:
+`watching` → `monitor` → `signal_active` → `signal_reinforced` /
+`signal_mixed` / `signal_negative`
 
-3. **Universe discipline:** the monitored universe is explicit and deliberate.
-   Discovery is a separate queue. Admission is a human decision.
+- `signal_state.py` — pure transition engine (no Firestore)
+- State transitions fire after every `save_signal_result`
+- Decay check runs at end of each pipeline run
+- History recorded to subcollections — append-only, never modified
 
-4. **Abstraction integrity:** all six abstractions must be respected.
-   Concrete providers are injected — never instantiated inline.
+---
 
-5. **Free first, paid when earned:** all PoC work uses free-tier sources.
-   Paid upgrades are triggered by demonstrated need, not assumption.
+## Commands
 
-6. **Liquidity transparency:** every universe member carries a liquidity flag.
-   Signals on illiquid stocks are surfaced, not suppressed. The human decides.
+```bash
+# Backend
+cd backend && python pipeline.py
+cd backend && python job_runner.py
+cd backend && python import_universe_csv.py
 
-7. **Observability:** every pipeline run must be self-explanatory from its log alone.
-   Log what was ingested and from which source, what was new vs. duplicate and why
-   (including which prior source caused the duplicate), what passed or failed each
-   pre-filter and why, and what was analysed and resulted. Progress markers on long
-   scans (e.g. every 100 companies). Use structured `print` statements during the
-   build phase; upgrade to the `logging` module when the pipeline stabilises.
+# Frontend
+cd frontend && streamlit run app.py
+
+# Module self-tests
+cd backend && python lens_base_filters.py
+cd backend && python lens_regulatory_catalyst.py
+cd backend && python storage_firestore.py
+cd backend && python llm_gemini.py
+cd backend && python telegram_notifier.py
+cd backend && python companies_house_connector.py
+cd backend && python signal_state.py
+```
 
 ---
 
 ## Known Gotchas
 
 - **VM user:** always connect as `danjmorris`, not `agoseris`
-- **File upload to VM:** use gear icon → Upload File in SSH terminal.
-  GCP Cloud Shell Editor cannot access `/home/danjmorris` directly. Note that sshfs has been implemented successfully, so a local mount point for VM filesystem can be made available.
 - **Large pastes:** GCP browser SSH terminal truncates large pastes.
-  Use file upload instead.
-- **python-telegram-bot:** async library. Do NOT reuse a `Bot` instance across multiple
-  `asyncio.run()` calls — the internal HTTP client binds to the first event loop, which
-  is closed after the first call, causing `RuntimeError('Event loop is closed')` on the
-  next. Correct pattern: create `Bot` as an async context manager inside a coroutine,
-  call that coroutine via `asyncio.run()` each time. See `telegram_notifier.py`.
-- **systemd + Python stdout buffering:** Python buffers stdout when writing to a pipe
-  (which `StandardOutput=journal` is). Add `Environment=PYTHONUNBUFFERED=1` to the
-  `[Service]` block or use `python -u`; otherwise `print()` output is silently swallowed
-  and `journalctl` shows nothing.
+  Use file upload or sshfs mount instead.
+- **python-telegram-bot:** async library. Do not reuse a `Bot` instance
+  across multiple `asyncio.run()` calls. Create `Bot` as an async context
+  manager inside a coroutine; call that coroutine via `asyncio.run()` each
+  time. See `telegram_notifier.py`.
+- **systemd stdout buffering:** set `PYTHONUNBUFFERED=1` in the `[Service]`
+  block. See `standards/principles/observability.md`.
 - **Gemini package:** use `from google import genai` and `genai.Client()`.
   `google.generativeai` is deprecated.
-- **Firestore composite index:** `dismissed + stored_at` query requires a composite
-  index. `app.py` handles the error gracefully with a fallback.
 - **Companies House:** covers England, Wales, Scotland, NI only.
   Offshore-incorporated LSE companies have no Companies House number.
-- **CH confidence scoring:** `import_universe_csv.py` matches company names to CH
-  numbers via fuzzy search (threshold 0.85, active companies only). Confidence 1.0 =
-  exact match; 0.85–<1.0 = fuzzy. Dissolved/inactive companies are excluded from
-  matching regardless of similarity score. The confidence flows through to
-  `Announcement.companies_house_confidence` and into LLM prompts as a data quality note.
-- **Firestore universe is a snapshot:** `save_universe()` deletes stale documents after
-  each write. Re-running `import_universe_csv.py` with a tighter filter will correctly
-  remove previously-admitted companies from Firestore.
-
----
-
-## Current Build Status
-
-The signal pipeline is fully operational end-to-end. All six abstractions are
-implemented. The universe is live in Firestore with 847 companies. Phase 1 (LSEG
-Playwright scraping) and Phase 2a/2b (signal/position state model) are complete.
-
-**Universe management (static CSV approach):**
-- `docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv` are the
-  source of truth. Committed to git for version history.
-- `import_universe_csv.py` imports CSVs → runs CH lookup → writes to Firestore.
-  Re-run whenever CSVs are updated. Takes ~8–9 minutes (CH API rate limit).
-- No market cap ceiling enforced in code — file is pre-filtered at source
-  (e.g. via LSEG screener) before being committed to docs/. 847 companies
-  currently admitted (93 muted, excluded from pipeline).
-- `pipeline.py` reads the universe from Firestore at startup. **Raises RuntimeError
-  if Firestore is empty.** Run `import_universe_csv.py` before the first pipeline run.
-
-**Signal/position state model (Phase 2a/2b — complete):**
-- Two-axis state model: signal state (system-managed) and position state (human-managed).
-- Signal states: `watching` → `monitor` → `signal_active` → `signal_reinforced` / `signal_mixed` / `signal_negative`
-- `signal_state.py` — pure transition engine (no Firestore). `classify_signal_strength`,
-  `compute_signal_transition`, `compute_decay_transitions`. Self-tests: run `python signal_state.py`.
-- State transitions fire after every `save_signal_result` in both `pipeline.py` and `job_runner.py`.
-- Decay check runs at end of each pipeline run; history recorded to subcollections.
-
-**News ingestion — two paths:**
-- **Autonomous (cron):** `CompaniesHouseProvider` fetches filing history for 673
-  CH-matched universe companies daily. Rate-limited at 0.6s/request. Produces
-  secondary confirmation of RNS events (see `SOBER_ASSESSMENT_v1.md`).
-- **Interactive (Playwright + job queue):** "Fetch from LSEG" button in Ingest tab
-  scrapes the LSEG News Explorer via headless Chromium (`lseg_scraper.py`). Makes
-  three targeted fetches — MCX (FTSE 250), SMX (FTSE Small Cap), AXX (FTSE AIM
-  All-Share) — each well under the 500-row daily limit. Results merged and
-  deduplicated on `source_url`. User selects rows; "Fetch & Analyse" fetches the
-  full body and submits an `lseg_ingest` job. `job_runner.py` on the VM runs full
-  LLM analysis. Excel upload retained as fallback.
-
-## Commands
-
-**Run the backend pipeline:**
-```bash
-cd backend && python pipeline.py
-```
-
-**Run the frontend dashboard:**
-```bash
-cd frontend && streamlit run app.py
-```
-
-**Import universe from CSV into Firestore (run once, then re-run when CSVs are updated):**
-```bash
-cd backend && python import_universe_csv.py
-```
-
-**Run the job runner (interactive ingestion worker):**
-```bash
-cd backend && python job_runner.py
-```
-
-**Test the LSEG Excel parser:**
-```bash
-cd backend && python lseg_excel_provider.py ../docs/LSEG_news_capture.xlsx
-```
-
-**Test individual backend modules** (each has a `__main__` block):
-```bash
-cd backend
-python lens_base_filters.py             # Test universal pre-filters
-python lens_regulatory_catalyst.py      # Test regulatory catalyst strategy
-python storage_firestore.py             # Test Firestore connectivity
-python llm_gemini.py                    # Test Gemini API
-python telegram_notifier.py             # Test Telegram channel
-python companies_house_connector.py     # Test Companies House API
-```
-
-**Environment:** Requires a `.env` file at the **project root** (`.env`) with keys for: Gemini, Companies House, Telegram, Anthropic, and a Google Cloud credentials JSON path for Firestore.
-
-## Architecture
-
-This is an autonomous investment research platform for LSE small-cap stocks. It ingests market news, filters it through investment lenses, analyzes signals with an LLM, stores results in Firestore, and surfaces them via a Streamlit dashboard and Telegram notifications.
-
-### Pipeline Flow (`backend/pipeline.py`)
-
-```
-Data Ingestion → Deduplication (Firestore) → Routing → Pre-filtering → LLM Analysis → Storage → Notification
-```
-
-**Two parallel queues:**
-- **Signal Queue** — companies in the monitored universe (loaded from Firestore). Receives full LLM analysis; high-confidence results trigger Telegram alerts and appear in the dashboard.
-- **Discovery Queue** — companies NOT in the universe. Receives a lightweight LLM assessment to recommend whether a company should be added. The universe only grows through explicit human decision (anti-bias principle).
-
-### Pluggable Architecture (`backend/abstractions.py`)
-
-All major components follow abstract base classes, making them swappable:
-- `AnnouncementProviderBase` — news sources (Companies House, LSEG Excel)
-- `LLMProviderBase` — LLM backends (currently Gemini 2.0 Flash via `llm_gemini.py`)
-- `NotificationProviderBase` — channels (currently Telegram)
-- `StorageProviderBase` — backends (currently Firestore via `storage_firestore.py`)
-- `StrategyLensBase` — investment strategies (currently Regulatory Catalyst)
-
-Adding a new lens, data source, or LLM means implementing the relevant abstract class and wiring it into `pipeline.py`.
-
-### Filtering Layer
-
-Pre-filtering happens in two stages before LLM calls (to save cost and latency):
-1. **Universal filters** (`lens_base_filters.py`) — reject residential noise, local authority decisions, SPVs; require LSE context signals (plc, AIM, RNS, placing, etc.)
-2. **Strategy filters** (`lens_regulatory_catalyst.py`) — require regulatory/planning keywords relevant to the active investment lens
-
-### Firestore Collections
-
-- `announcements` — deduplication store keyed by headline fingerprint
-- `signal_results` — full LLM analysis for universe companies
-- `discovery_results` — lightweight assessments for non-universe companies
-
-### Frontend (`frontend/app.py`)
-
-Streamlit dashboard with five tabs:
-- **Signals** — actionable opportunities with full LLM output, dismiss capability
-- **Discovery** — universe admission candidates
-- **Universe** — company list management; CSV import with delta preview; mute/remove
-- **Ingest** — "Fetch from LSEG" button + Excel fallback; row filter/sort; inline body-fetch + job submission
-- **Config** — exclusion list editor (announcement types + company keywords)
-
-Sidebar: Universe Lookup (membership, CH confidence, signal count, most recent signal).
-
-Split into modules: `constants.py`, `ui_helpers.py`, `parse_helpers.py`, `firestore_helpers.py`, `lseg_scraper.py`.
-
-Reads/writes Firestore directly. No backend imports. Runs locally (WSL2) — Community
-Cloud deployment possible but LSEG Playwright scraping requires local machine. Credential
-loader tries `st.secrets["gcp_service_account"]` first, falls back to
-`GOOGLE_APPLICATION_CREDENTIALS` env var for local development.
-
-### Monitored Universe
-
-847 LSE small-cap companies stored in Firestore (`universe_companies` collection),
-loaded at pipeline startup via `FirestoreUniverseProvider`. Sourced from
-`docs/AIM_data_complete_*.csv` and `docs/FTSE_AllShare_complete_*.csv`, imported
-via `import_universe_csv.py`. Each company carries a `companies_house_number` and
-`companies_house_confidence` score populated at import time.
-
+- **CH confidence scoring:** fuzzy match threshold 0.85, active companies
+  only. Confidence 1.0 = exact; 0.85–<1.0 = fuzzy. Flows through to
+  `Announcement.companies_house_confidence` and into LLM prompts.
+- **Universe is a snapshot:** `save_universe()` deletes stale documents
+  after each write. Re-running `import_universe_csv.py` with a tighter
+  filter correctly removes previously-admitted companies.
+- **Pipeline raises RuntimeError if universe is empty.** Run
+  `import_universe_csv.py` before the first pipeline run.

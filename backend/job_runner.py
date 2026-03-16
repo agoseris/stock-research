@@ -57,6 +57,8 @@ from signal_state import (
     is_negative_signal,
     extract_confidence,
     compute_signal_transition,
+    int_strength_to_unified,
+    classify_signal_strength_unified,
 )
 from storage_firestore import FirestoreProvider
 from storage_firestore_universe import FirestoreUniverseProvider
@@ -314,6 +316,7 @@ REASON: [one sentence]"""
         cfg = self._get_director_lens_config()
         skip_on_ignore = cfg.get("skip_agentic_on_ignore", True)
         min_consideration = cfg.get("agentic_min_consideration_gbp", 0)
+        now = datetime.now(timezone.utc)
 
         for tx in open_market_txs:
             tx_enriched = dict(tx)
@@ -330,6 +333,29 @@ REASON: [one sentence]"""
                 )
                 rec = simple_result.get("RECOMMENDED_ACTION", "unknown")
                 print(f"  [{ticker}] Simple lens: {rec} (director: {director})")
+
+                # State machine — Director lens
+                strength_int = simple_result.get("SIGNAL_STRENGTH")
+                signal_strength = int_strength_to_unified(strength_int)
+                self._apply_state_transition_unified(
+                    ticker=ticker,
+                    signal_strength=signal_strength,
+                    source_url=announcement.source_url or "",
+                    headline=announcement.headline or "",
+                    lens_id="director_purchasing",
+                    now=now,
+                )
+
+                # Telegram notification — 'act' threshold only
+                notification_payload = {
+                    **simple_result,
+                    "ticker": ticker,
+                    "company_name": announcement.company_name,
+                    "headline": announcement.headline,
+                    "source_url": announcement.source_url,
+                    "announcement_published_at": str(announcement.published_at),
+                }
+                self._notify_director_signal(notification_payload)
 
                 # Materiality gate — override agentic_status to "skipped" if:
                 #   1. Simple lens recommends Ignore, or
@@ -405,6 +431,27 @@ REASON: [one sentence]"""
             trigger = simple_result.get("trigger_investor_research", False)
             print(f"  [{ticker}] TR-1 simple lens: {rec} (strength={strength}, "
                   f"trigger_research={trigger})")
+
+            # State machine — TR-1 lens
+            self._apply_state_transition_unified(
+                ticker=ticker,
+                signal_strength=strength,
+                source_url=announcement.source_url or "",
+                headline=announcement.headline or "",
+                lens_id="tr1_accumulation",
+                now=datetime.now(timezone.utc),
+            )
+
+            # Telegram notification — 'act' threshold only
+            tr1_signal_payload = {
+                **tr1_data,
+                "headline": announcement.headline,
+                "source_url": announcement.source_url,
+                "announcement_published_at": str(announcement.published_at),
+                "simple_lens_result": simple_result,
+            }
+            self._notify_tr1_signal(tr1_signal_payload)
+
         except Exception as e:
             print(f"  [{ticker}] TR-1 simple lens failed: {e}")
 
@@ -480,6 +527,95 @@ REASON: [one sentence]"""
                 )
         except Exception as e:
             print(f"  [{ticker}] State transition error: {e}")
+
+    def _apply_state_transition_unified(
+        self,
+        ticker: str,
+        signal_strength: str,
+        source_url: str,
+        headline: str,
+        lens_id: str,
+        now: datetime,
+    ) -> None:
+        """
+        Apply state transition using a unified signal_strength string value.
+
+        Converts signal_strength to state-machine-ready values via
+        classify_signal_strength_unified, then calls compute_signal_transition
+        and persists the result.  Used by the Director and TR-1 lens flows.
+
+        Parameters
+        ----------
+        ticker : str
+        signal_strength : str
+            One of the SIGNAL_STRENGTHS values (noise/weak/moderate/substantial/strong/negative).
+        source_url : str
+        headline : str
+        lens_id : str
+            "director_purchasing" | "tr1_accumulation"
+        now : datetime
+        """
+        try:
+            sm_strength, is_neg = classify_signal_strength_unified(
+                {"signal_strength": signal_strength}
+            )
+            company = self.universe_storage.get_company(ticker)
+            current_state = company.signal_state if company else None
+            normalised_current = current_state or "watching"
+
+            new_state = compute_signal_transition(current_state, sm_strength, is_neg)
+
+            if new_state is not None and new_state != normalised_current:
+                self.universe_storage.update_signal_state(ticker, new_state, now)
+                self.universe_storage.record_signal_transition(ticker, {
+                    "timestamp": now,
+                    "previous_state": normalised_current,
+                    "new_state": new_state,
+                    "trigger_source_url": source_url,
+                    "trigger_headline": headline,
+                    "lens": lens_id,
+                    "signal_strength": sm_strength,
+                    "llm_confidence": "",
+                })
+                print(f"  [{ticker}] State: {normalised_current} → {new_state} "
+                      f"({sm_strength}{'  [neg]' if is_neg else ''})")
+            else:
+                # No state change — touch last_signal_at only
+                self.universe_storage.update_signal_state(
+                    ticker, normalised_current, now, update_since=False
+                )
+        except Exception as e:
+            print(f"  [{ticker}] State transition error: {e}")
+
+    def _notify_director_signal(self, result: dict) -> None:
+        """Send Telegram notification for a Director purchasing signal if recommendation is 'act'."""
+        # result contains simple_* prefixed fields and announcement metadata
+        rec_raw = result.get("simple_recommended_action", "")
+        rec_norm = _map_director_recommendation(rec_raw)
+        if rec_norm == "act":
+            try:
+                self.notifier.send(
+                    self.notifier.format_director_signal(result),
+                    priority="high",
+                )
+            except Exception as e:
+                ticker = result.get("ticker", "?")
+                print(f"  [{ticker}] Director Telegram notification failed: {e}")
+
+    def _notify_tr1_signal(self, result: dict) -> None:
+        """Send Telegram notification for a TR-1 crossing signal if recommendation is 'act'."""
+        simple_result = result.get("simple_lens_result") or {}
+        rec_raw = simple_result.get("recommendation", "")
+        rec_norm = _map_tr1_recommendation(rec_raw)
+        if rec_norm == "act":
+            try:
+                self.notifier.send(
+                    self.notifier.format_tr1_signal(result),
+                    priority="high",
+                )
+            except Exception as e:
+                ticker = result.get("ticker", "?")
+                print(f"  [{ticker}] TR-1 Telegram notification failed: {e}")
 
     # ------------------------------------------------------------------
     # Universe admission
@@ -808,6 +944,26 @@ REASON: [one sentence]"""
 def _ts() -> str:
     """Current UTC time as HH:MM:SS for log prefixes."""
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
+
+
+def _map_director_recommendation(rec: str) -> str:
+    """Map Director simple / synthesis recommendation to unified value."""
+    r = (rec or "").strip().lower()
+    if r in ("investigate further", "investigate"):
+        return "act"
+    if r == "monitor":
+        return "monitor"
+    return "ignore"
+
+
+def _map_tr1_recommendation(rec: str) -> str:
+    """Map TR-1 simple lens recommendation to unified value."""
+    r = (rec or "").strip().lower()
+    if r == "investigate":
+        return "act"
+    if r == "monitor":
+        return "monitor"
+    return "ignore"
 
 
 def _compute_fingerprint(text: str) -> str:

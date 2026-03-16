@@ -38,7 +38,7 @@ SIGNAL_STATES = frozenset({
     "signal_negative",
 })
 
-SIGNAL_STRENGTHS = frozenset({"strong", "moderate", "weak", "noise"})
+SIGNAL_STRENGTHS = frozenset({"strong", "substantial", "moderate", "weak", "noise"})
 
 
 def _normalise(state: Optional[str]) -> str:
@@ -165,6 +165,74 @@ def extract_confidence(llm_analysis: str) -> str:
         if stripped.upper().startswith("CONFIDENCE_SIGNAL:"):
             return stripped.split(":", 1)[1].strip()
     return ""
+
+
+def int_strength_to_unified(val) -> str:
+    """
+    Convert an integer strength score (1–10) to the unified string scale.
+
+    Mapping:
+        9–10 → 'strong'
+        7–8  → 'substantial'
+        5–6  → 'moderate'
+        3–4  → 'weak'
+        1–2  → 'noise'
+
+    Used by job_runner.py when the Director simple lens returns an integer score.
+    Returns 'noise' for None or unparseable input.
+    """
+    if val is None:
+        return "noise"
+    try:
+        v = int(val)
+        if v >= 9:
+            return "strong"
+        if v >= 7:
+            return "substantial"
+        if v >= 5:
+            return "moderate"
+        if v >= 3:
+            return "weak"
+        return "noise"
+    except (TypeError, ValueError):
+        return "noise"
+
+
+def classify_signal_strength_unified(signal_doc: dict) -> tuple:
+    """
+    Classify signal strength from a unified signal document for state-machine use.
+
+    Reads the `signal_strength` field (one of the SIGNAL_STRENGTHS values) and
+    returns a two-tuple (state_machine_strength, is_negative) suitable for use
+    with compute_signal_transition().
+
+    Mapping:
+        'negative'   → ('noise', True)   — is_negative overrides strength
+        'substantial' → ('strong', False) — maps to strong for transition table
+        all others   → (strength, False)  — passed through directly
+
+    Parameters
+    ----------
+    signal_doc : dict
+        A unified signal document (or any dict with a 'signal_strength' key).
+
+    Returns
+    -------
+    (state_machine_strength, is_negative) : tuple[str, bool]
+    """
+    strength = (signal_doc.get("signal_strength") or "noise").lower()
+
+    if strength == "negative":
+        return "noise", True
+
+    # 'substantial' is not in the transition table — map to 'strong'
+    sm_strength = "strong" if strength == "substantial" else strength
+
+    # Clamp to valid state-machine strengths
+    if sm_strength not in ("strong", "moderate", "weak", "noise"):
+        sm_strength = "noise"
+
+    return sm_strength, False
 
 
 # ---------------------------------------------------------------------------
