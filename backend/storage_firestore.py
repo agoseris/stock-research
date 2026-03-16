@@ -4,8 +4,8 @@ storage_firestore.py
 Implements StorageProviderBase using Google Cloud Firestore.
 
 Collections:
-  announcements   — deduplication store, keyed by headline fingerprint
-  signal_results  — full LLM analysis results for universe companies
+  announcements    — deduplication store, keyed by headline fingerprint
+  signals_unified  — all lens results in the unified schema (Phase 5+)
   discovery_results — lightweight assessments for non-universe companies
 
 All writes are non-blocking best-effort — a Firestore failure never
@@ -14,8 +14,9 @@ crashes the pipeline. Errors are logged to stdout.
 
 import hashlib
 import os
+import re
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv, find_dotenv
 from google.cloud import firestore
@@ -23,6 +24,75 @@ from google.cloud import firestore
 from abstractions import Announcement, StorageProviderBase
 
 load_dotenv(find_dotenv())
+
+
+# ---------------------------------------------------------------------------
+# Regulatory catalyst transform helpers
+# ---------------------------------------------------------------------------
+
+def _extract_catalyst_field(blob: str, field: str) -> str:
+    """Extract a labeled field from an LLM analysis blob (FIELD: value)."""
+    for line in (blob or "").splitlines():
+        stripped = line.strip()
+        if stripped.upper().startswith(field.upper() + ":"):
+            return stripped.split(":", 1)[1].strip()
+    return ""
+
+
+def _parse_relevance_score(relevance_raw: str) -> Optional[int]:
+    """Parse RELEVANCE field value e.g. '8/10' to an integer, or None."""
+    if not relevance_raw:
+        return None
+    m = re.search(r'(\d+)\s*/\s*10', relevance_raw)
+    if m:
+        return int(m.group(1))
+    m = re.search(r'^\s*(\d+)\s*$', relevance_raw)
+    if m:
+        v = int(m.group(1))
+        return v if 0 <= v <= 10 else None
+    return None
+
+
+def _int_strength_to_unified(val) -> str:
+    """Map integer 1–10 strength score to unified string scale."""
+    if val is None:
+        return "noise"
+    try:
+        v = int(val)
+        if v >= 9:
+            return "strong"
+        if v >= 7:
+            return "substantial"
+        if v >= 5:
+            return "moderate"
+        if v >= 3:
+            return "weak"
+        return "noise"
+    except (TypeError, ValueError):
+        return "noise"
+
+
+def _classify_catalyst_strength(action: str, relevance_raw: str) -> str:
+    """Derive unified signal_strength from RELEVANCE score; fall back to action."""
+    score = _parse_relevance_score(relevance_raw)
+    if score is not None:
+        return _int_strength_to_unified(score)
+    a = (action or "").lower()
+    if a == "yes":
+        return "moderate"
+    if a == "monitor":
+        return "weak"
+    return "noise"
+
+
+def _map_catalyst_recommendation(action: str) -> str:
+    """Map RECOMMENDED_ACTION (Yes/No/Monitor) to unified recommendation."""
+    a = (action or "").strip().lower()
+    if a == "yes":
+        return "act"
+    if a == "monitor":
+        return "monitor"
+    return "ignore"
 
 
 class FirestoreProvider(StorageProviderBase):
@@ -35,8 +105,10 @@ class FirestoreProvider(StorageProviderBase):
 
     # Firestore collection names
     ANNOUNCEMENTS_COLLECTION = "announcements"
-    SIGNAL_RESULTS_COLLECTION = "signal_results"
+    SIGNALS_UNIFIED_COLLECTION = "signals_unified"
     DISCOVERY_RESULTS_COLLECTION = "discovery_results"
+
+    SIGNAL_TTL_DAYS = 730
 
     def __init__(self):
         self.db = firestore.Client()
@@ -134,19 +206,78 @@ class FirestoreProvider(StorageProviderBase):
 
     # --- Signal results ---
 
+    def _build_unified_catalyst_doc(self, result: dict, now: datetime) -> Tuple[str, dict]:
+        """
+        Transform a raw regulatory catalyst result dict (with llm_analysis blob)
+        into a unified schema document for signals_unified.
+
+        Returns (unified_id, unified_doc).
+        """
+        analysis = result.get("llm_analysis", "")
+
+        action_raw          = _extract_catalyst_field(analysis, "RECOMMENDED_ACTION")
+        relevance_raw       = _extract_catalyst_field(analysis, "RELEVANCE")
+        confidence_raw      = _extract_catalyst_field(analysis, "CONFIDENCE_SIGNAL")
+        summary_raw         = _extract_catalyst_field(analysis, "SUMMARY")
+        signal_type_raw     = _extract_catalyst_field(analysis, "SIGNAL_TYPE") or "regulatory_catalyst"
+        source_rel_raw      = _extract_catalyst_field(analysis, "SOURCE_RELIABILITY")
+        outcome_raw         = _extract_catalyst_field(analysis, "OUTCOME_PROBABILITY")
+        market_mispricing   = _extract_catalyst_field(analysis, "MARKET_MISPRICING")
+
+        recommendation  = _map_catalyst_recommendation(action_raw)
+        signal_strength = _classify_catalyst_strength(action_raw, relevance_raw)
+
+        key_text   = result.get("source_url") or result.get("headline", "")
+        unified_id = self._fingerprint(key_text) if key_text else hashlib.sha256(
+            str(now.timestamp()).encode()
+        ).hexdigest()
+
+        unified_doc = {
+            "ticker":           result.get("ticker", ""),
+            "company_name":     result.get("company_name", ""),
+            "lens_id":          "regulatory_catalyst",
+            "signal_type":      signal_type_raw,
+            "stored_at":        now.isoformat(),
+            "published_at":     str(result.get("published_at", "")),
+            "source_url":       result.get("source_url", ""),
+            "headline":         result.get("headline", ""),
+            "signal_strength":  signal_strength,
+            "recommendation":   recommendation,
+            "summary":          summary_raw,
+            "rationale":        outcome_raw,
+            "limitations":      "",
+            "confidence_signal": confidence_raw,
+            "dismissed":        False,
+            "dismissed_at":     None,
+            "agentic_status":   "not_applicable",
+            "expires_at":       now + timedelta(days=self.SIGNAL_TTL_DAYS),
+            "price_pence":      result.get("price_pence"),
+            "price_change":     result.get("price_change"),
+            "market_cap_gbp":   result.get("market_cap_gbp"),
+            "lens_data": {
+                "analysed_at":       result.get("analysed_at", now.isoformat()),
+                "lens":              result.get("lens", "regulatory_catalyst"),
+                "queue":             result.get("queue"),
+                "source":            result.get("source"),
+                "relevance_score":   relevance_raw,
+                "source_reliability": source_rel_raw,
+                "market_mispricing": market_mispricing,
+            },
+        }
+        return unified_id, unified_doc
+
     def save_signal_result(self, result: dict) -> bool:
         """
-        Persist a signal queue result.
-        Uses auto-generated Firestore document ID.
-        Adds a stored_at timestamp for ordering in the UI.
+        Persist a regulatory catalyst signal result to signals_unified.
+        Parses the llm_analysis blob and writes a normalised unified document.
+        Document ID is a fingerprint of source_url (or headline), ensuring
+        idempotent writes — re-processing the same announcement overwrites
+        the existing document rather than creating a duplicate.
         """
         try:
-            payload = dict(result)
             now = datetime.now(timezone.utc)
-            payload["stored_at"] = now.isoformat()
-            payload["expires_at"] = now + timedelta(days=90)
-            payload.setdefault("dismissed", False)
-            self.db.collection(self.SIGNAL_RESULTS_COLLECTION).add(payload)
+            unified_id, unified_doc = self._build_unified_catalyst_doc(result, now)
+            self.db.collection(self.SIGNALS_UNIFIED_COLLECTION).document(unified_id).set(unified_doc)
             return True
         except Exception as e:
             print(f"  [Firestore] save_signal_result failed: {e}")
@@ -154,11 +285,12 @@ class FirestoreProvider(StorageProviderBase):
 
     def get_signal_results(self, limit: int = 50) -> List[dict]:
         """
-        Retrieve recent signal results, most recent first.
+        Retrieve recent regulatory catalyst signal results from signals_unified.
         """
         try:
             docs = (
-                self.db.collection(self.SIGNAL_RESULTS_COLLECTION)
+                self.db.collection(self.SIGNALS_UNIFIED_COLLECTION)
+                .where("lens_id", "==", "regulatory_catalyst")
                 .order_by("stored_at", direction=firestore.Query.DESCENDING)
                 .limit(limit)
                 .stream()
