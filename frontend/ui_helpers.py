@@ -46,6 +46,30 @@ def recommended_action_badge(analysis_text):
         return f'<span class="badge badge-no" title="{tip}">— No action</span>', "action-no"
 
 
+def recommended_action_badge_unified(recommendation: str):
+    """
+    Badge HTML and CSS card class from a unified recommendation value.
+
+    Parameters
+    ----------
+    recommendation : str
+        One of: 'act', 'monitor', 'ignore' (unified schema values).
+
+    Returns
+    -------
+    (badge_html, card_css_class) matching the return type of recommended_action_badge().
+    """
+    r = (recommendation or "").lower()
+    if r == "act":
+        tip = _ACTION_TOOLTIPS["yes"]
+        return f'<span class="badge badge-yes" title="{tip}">⬆ Action</span>', "action-yes"
+    if r == "monitor":
+        tip = _ACTION_TOOLTIPS["monitor"]
+        return f'<span class="badge badge-monitor" title="{tip}">◉ Monitor</span>', "action-monitor"
+    tip = _ACTION_TOOLTIPS["no"]
+    return f'<span class="badge badge-no" title="{tip}">— No action</span>', "action-no"
+
+
 def recommend_add_badge(assessment_text):
     val = get_field(assessment_text, "RECOMMEND_ADD").lower()
     if val == "yes":

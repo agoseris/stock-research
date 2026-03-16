@@ -38,11 +38,23 @@ def get_db():
     return firestore.Client()
 
 
-# ── Signal / discovery results ─────────────────────────────────────────────────
+# ── Signal / discovery results (reads from signals_unified, lens_id=regulatory_catalyst) ──
+
+_UNIFIED_COLLECTION = "signals_unified"
+_CATALYST_LENS_ID = "regulatory_catalyst"
+
 
 def get_signal_results(db, limit=500):
+    """
+    Fetch non-dismissed regulatory catalyst signals from signals_unified, newest first.
+
+    Requires a composite index on (lens_id, dismissed, stored_at).
+    Falls back gracefully when index not yet built — app.py calls
+    get_signal_results_all() on the resulting exception.
+    """
     docs = (
-        db.collection("signal_results")
+        db.collection(_UNIFIED_COLLECTION)
+        .where("lens_id", "==", _CATALYST_LENS_ID)
         .where("dismissed", "==", False)
         .order_by("stored_at", direction=firestore.Query.DESCENDING)
         .limit(limit)
@@ -52,25 +64,38 @@ def get_signal_results(db, limit=500):
 
 
 def get_signal_results_all(db, limit=500):
-    """Fallback — fetch all and filter in Python if index not yet built."""
+    """
+    Fallback — fetch all regulatory catalyst signals and filter/sort in Python.
+
+    Uses only single-field equality filters (no composite index required).
+    """
     docs = (
-        db.collection("signal_results")
-        .order_by("stored_at", direction=firestore.Query.DESCENDING)
+        db.collection(_UNIFIED_COLLECTION)
+        .where("lens_id", "==", _CATALYST_LENS_ID)
         .limit(limit)
         .stream()
     )
-    return [(doc.id, d) for doc in docs if not (d := doc.to_dict()).get("dismissed", False)]
+    results = [
+        (d.id, d.to_dict()) for d in docs
+        if not d.to_dict().get("dismissed", False)
+    ]
+    results.sort(key=lambda x: str(x[1].get("stored_at", "")), reverse=True)
+    return results
 
 
 def get_all_signals_for_ticker(db, ticker: str) -> list:
     """
-    Return all non-dismissed signal_results for a specific ticker, newest first.
+    Return all non-dismissed regulatory catalyst signals for a specific ticker, newest first.
 
     Used as a top-up pass to guarantee acted/deferred positions remain visible
-    regardless of the main fetch limit. Single-field equality filter — no composite
-    index required.
+    regardless of the main fetch limit.
     """
-    docs = db.collection("signal_results").where("ticker", "==", ticker).stream()
+    docs = (
+        db.collection(_UNIFIED_COLLECTION)
+        .where("lens_id", "==", _CATALYST_LENS_ID)
+        .where("ticker", "==", ticker)
+        .stream()
+    )
     results = [
         (d.id, d.to_dict()) for d in docs
         if not d.to_dict().get("dismissed", False)
@@ -109,8 +134,8 @@ def dismiss_document(db, collection, doc_id):
 
 
 def delete_signal_result(db, doc_id: str) -> None:
-    """Hard-delete a signal_results document. Irreversible."""
-    db.collection("signal_results").document(doc_id).delete()
+    """Hard-delete a signals_unified regulatory catalyst document. Irreversible."""
+    db.collection(_UNIFIED_COLLECTION).document(doc_id).delete()
 
 
 # ── Director lens signals (signals collection) ─────────────────────────────────

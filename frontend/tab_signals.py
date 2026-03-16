@@ -10,9 +10,7 @@ from firestore_helpers import (
     delete_director_signal,
 )
 from ui_helpers import (
-    parse_analysis,
-    get_field,
-    recommended_action_badge,
+    recommended_action_badge_unified,
     signal_state_badge,
     position_state_badge,
     format_signal_age,
@@ -824,8 +822,10 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
         if pos == "closed" and pos_filter != "Closed":
             return False
         if since_cutoff:
+            # unified schema: prefer lens_data.analysed_at, fall back to stored_at
+            _at_raw = (result.get("lens_data") or {}).get("analysed_at") or result.get("stored_at", "")
             try:
-                dt = datetime.fromisoformat(result.get("analysed_at", "").replace("Z", "+00:00"))
+                dt = datetime.fromisoformat(str(_at_raw).replace("Z", "+00:00"))
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 if dt < since_cutoff:
@@ -840,15 +840,16 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
         company = company_map.get((result.get("ticker") or "").upper(), {})
         if not _passes_filters(result, company):
             continue
-        action_val = get_field(result.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower()
-        if action_val not in ("yes", "monitor") and hide_no_action:
+        # unified schema: recommendation is "act" | "monitor" | "ignore"
+        action_val = (result.get("recommendation") or "ignore").lower()
+        if action_val not in ("act", "monitor") and hide_no_action:
             continue
         pos = (company.get("position_state") or "").strip()
         sig = company.get("signal_state") or "watching"
         item = (doc_id, result, company)
         if pos == "acted" and sig in ("signal_negative", "signal_mixed"):
             grp_urgent.append(item)
-        elif action_val == "yes":
+        elif action_val == "act":
             grp_action.append(item)
         elif action_val == "monitor":
             grp_monitor.append(item)
@@ -871,21 +872,23 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
         )
         # ── Card renderer (defined once, called per group) ───────────────────────
         def _render_signal_card(doc_id, result, company):
-            analysis    = result.get("llm_analysis", "")
-            ticker      = result.get("ticker") or "—"
-            co_name     = result.get("company_name") or ""
-            headline    = result.get("headline") or "—"
-            source      = result.get("source") or "—"
-            source_url  = result.get("source_url", "")
-            analysed_at = result.get("analysed_at") or ""
-            summary     = get_field(analysis, "SUMMARY")
+            # All fields from unified schema — no blob parsing
+            lens_data    = result.get("lens_data") or {}
+            ticker       = result.get("ticker") or "—"
+            co_name      = result.get("company_name") or ""
+            headline     = result.get("headline") or "—"
+            source_url   = result.get("source_url", "")
+            source       = lens_data.get("source") or "—"
+            analysed_at  = lens_data.get("analysed_at") or result.get("stored_at", "")
+            summary      = result.get("summary", "")
+            recommendation = result.get("recommendation", "ignore")
 
             sig_state = company.get("signal_state") or "watching"
             pos_state = (company.get("position_state") or "").strip()
             sig_age   = format_signal_age(company.get("signal_state_since"))
             is_urgent = pos_state == "acted" and sig_state in ("signal_negative", "signal_mixed")
 
-            badge_html, card_class = recommended_action_badge(analysis)
+            badge_html, card_class = recommended_action_badge_unified(recommendation)
             classes     = f"signal-card-compact {card_class}" + (" urgent" if is_urgent else "")
             state_badge = signal_state_badge(sig_state, sig_age)
             pos_badge   = position_state_badge(pos_state)
@@ -900,7 +903,6 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
                 if is_urgent else ""
             )
 
-            # Headline links to source article when a URL is available
             headline_html = (
                 f'<a href="{source_url}" target="_blank" '
                 f'style="color:inherit;text-decoration:none;'
@@ -917,7 +919,7 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
                 f'<span class="card-market">{mkt_label} &nbsp;·&nbsp; {price_html}</span>'
                 f'</div>'
                 f'<div class="card-headline">{headline_html}</div>'
-                f'<div class="card-meta">{format_timestamp(analysed_at)} &nbsp;·&nbsp; {source}</div>'
+                f'<div class="card-meta">{format_timestamp(str(analysed_at))} &nbsp;·&nbsp; {source}</div>'
                 f'<div class="card-badges">{badge_html}{state_badge}{pos_badge}</div>'
                 f'</div>'
             )
@@ -934,12 +936,26 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
                             f'sans-serif;line-height:1.6;margin-bottom:0.8rem;">{summary}</div>',
                             unsafe_allow_html=True,
                         )
-                    # Exclude fields already surfaced at card level
-                    _top_level = {"SUMMARY", "RECOMMENDED_ACTION"}
-                    parsed = [(k, v) for k, v in parse_analysis(analysis)
-                              if k.upper() not in _top_level]
-                    formatted = "\n".join(f"{k}: {v}" if k else v for k, v in parsed)
-                    st.markdown(f'<div class="analysis-block">{formatted}</div>', unsafe_allow_html=True)
+                    # Structured analysis fields from unified schema
+                    _fields = [
+                        ("Signal Strength",    result.get("signal_strength", "")),
+                        ("Signal Type",        result.get("signal_type", "")),
+                        ("Relevance",          lens_data.get("relevance_score", "")),
+                        ("Outcome Probability", result.get("rationale", "")),
+                        ("Confidence Signal",  result.get("confidence_signal", "")),
+                        ("Source Reliability", lens_data.get("source_reliability", "")),
+                        ("Market Mispricing",  lens_data.get("market_mispricing", "")),
+                    ]
+                    lines = "".join(
+                        f'<div style="margin:0.25rem 0;">'
+                        f'<span style="color:#6a8ca8;">{k}:</span> {v}</div>'
+                        for k, v in _fields if v
+                    )
+                    if lines:
+                        st.markdown(
+                            f'<div class="analysis-block" style="font-size:0.78rem;">{lines}</div>',
+                            unsafe_allow_html=True,
+                        )
 
             # ── Position state buttons — only valid transitions shown per state ──
             # None / Closed : Act · Defer · Decline · Dismiss  (Closed = back to neutral)
