@@ -21,5 +21,6 @@ scripts/*.log
 scripts/venv/
 
 # Data (optional - remove if you want these in git)
-# *.xlsx
-# *.csv
+*.xlsx
+*.csv
+*.out

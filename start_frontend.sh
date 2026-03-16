@@ -20,6 +20,7 @@ source venv/bin/activate
 nohup streamlit run app.py \
     --server.headless true \
     --server.port 8501 \
+    --server.address 0.0.0.0 \
     > "$LOG_FILE" 2>&1 &
 
 echo $! > "$PID_FILE"

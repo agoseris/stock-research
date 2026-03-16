@@ -560,6 +560,30 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
     # agentic_status == "skipped": no expander — simple lens decided it wasn't needed
 
 
+# ---------------------------------------------------------------------------
+# Collapse-resistant section toggle (st.expander has no `key` support in this
+# Streamlit build, so we manage open/closed state in session_state manually).
+# ---------------------------------------------------------------------------
+
+def _toggle_section(state_key: str, label: str, items: list, render_fn) -> None:
+    """Render a collapsible section whose state survives st.rerun() calls.
+
+    Unlike st.expander(expanded=False), this keeps the section open after a
+    button click inside it triggers st.rerun().
+    """
+    if state_key not in st.session_state:
+        st.session_state[state_key] = False
+
+    is_open = st.session_state[state_key]
+    arrow = "▼" if is_open else "▶"
+    if st.button(f"{arrow}  {label}", key=f"{state_key}_toggle"):
+        st.session_state[state_key] = not is_open
+
+    if st.session_state[state_key]:
+        for item in items:
+            render_fn(item)
+
+
 def _render_tr1_signals_section(
     db, tr1_signals: list, company_map: dict,
     since_cutoff, pos_filter: str
@@ -637,9 +661,12 @@ def _render_tr1_signals_section(
                 _render_tr1_signal_card(item[0], item[1], item[2], db)
 
     if grp_ignore:
-        with st.expander(f"—  Ignored / Negative — {len(grp_ignore)}", expanded=False):
-            for item in grp_ignore:
-                _render_tr1_signal_card(item[0], item[1], item[2], db)
+        _toggle_section(
+            "tr1_ignore_open",
+            f"—  Ignored / Negative — {len(grp_ignore)}",
+            grp_ignore,
+            lambda item: _render_tr1_signal_card(item[0], item[1], item[2], db),
+        )
 
     st.markdown('<hr style="border-color:#1a2535;margin:1rem 0;">', unsafe_allow_html=True)
 
@@ -721,9 +748,12 @@ def _render_director_signals_section(
                 _render_director_signal_card(item[0], item[1], item[2], db)
 
     if grp_other:
-        with st.expander(f"—  Pending / Ignore — {len(grp_other)}", expanded=False):
-            for item in grp_other:
-                _render_director_signal_card(item[0], item[1], item[2], db)
+        _toggle_section(
+            "dir_other_open",
+            f"—  Pending / Ignore — {len(grp_other)}",
+            grp_other,
+            lambda item: _render_director_signal_card(item[0], item[1], item[2], db),
+        )
 
     st.markdown('<hr style="border-color:#1a2535;margin:1rem 0;">', unsafe_allow_html=True)
 
@@ -1004,6 +1034,9 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
                     _render_signal_card(*item)
 
         if not hide_no_action and grp_no_action:
-            with st.expander(f"—  No action — {len(grp_no_action)}", expanded=False):
-                for item in grp_no_action:
-                    _render_signal_card(*item)
+            _toggle_section(
+                "reg_no_action_open",
+                f"—  No action — {len(grp_no_action)}",
+                grp_no_action,
+                lambda item: _render_signal_card(*item),
+            )
