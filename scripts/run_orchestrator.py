@@ -57,6 +57,13 @@ if not _creds or not os.path.exists(_creds):
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("orchestrator")
+
 import anthropic
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
@@ -79,13 +86,6 @@ try:
 except Exception as _notifier_err:
     _notifier = None
     logger.warning("Telegram notifier unavailable: %s", _notifier_err)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("orchestrator")
 
 POLL_INTERVAL = 30       # seconds between Firestore polls
 MAX_SIGNALS_PER_POLL = 3  # signals to process per poll cycle
