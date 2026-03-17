@@ -861,9 +861,9 @@ REASON: [one sentence]"""
                     return
 
                 if classification.get("extraction_status") == "failed":
-                    self._complete_job(job_id, note="classification_failed")
-                    print(f"  [{ticker}] Classification failed — skipping lens analysis.")
-                    return
+                    print(f"  [{ticker}] Classification failed — falling back to Gemini lens.")
+                    # Fall through: article_type="administrative" means PDMR/TR-1 routes
+                    # don't fire; _run_signal_analysis (Gemini) will still run.
 
                 # Non-PDMR: run regulatory catalyst lens
                 result = self._run_signal_analysis(announcement)
