@@ -44,7 +44,7 @@ if not _creds_path or not os.path.exists(_creds_path):
 # Constants
 # ---------------------------------------------------------------------------
 
-SIGNAL_TTL_DAYS = 730  # 24-month TTL for unified documents (matches SIGNAL_TTL_DAYS)
+SIGNAL_TTL_DAYS = 90  # 90-day TTL for unified documents
 UNIFIED_COLLECTION = "signals_unified"
 
 

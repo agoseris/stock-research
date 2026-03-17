@@ -108,7 +108,7 @@ class FirestoreProvider(StorageProviderBase):
     SIGNALS_UNIFIED_COLLECTION = "signals_unified"
     DISCOVERY_RESULTS_COLLECTION = "discovery_results"
 
-    SIGNAL_TTL_DAYS = 730
+    SIGNAL_TTL_DAYS = 90
 
     def __init__(self):
         self.db = firestore.Client()
