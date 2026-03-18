@@ -79,14 +79,14 @@ def _simple_rec_badge(simple_rec: str) -> str:
 
 
 def _format_announcement_datetime(value) -> str:
-    """Format announcement published_at to 'YYYY-MM-DD HH:MM', with time."""
+    """Format announcement published_at to 'DD Mon YYYY HH:MM UTC'."""
     if not value:
         return ""
     if hasattr(value, "strftime"):
-        return value.strftime("%Y-%m-%d %H:%M")
+        return value.strftime("%d %b %Y  %H:%M UTC")
     try:
         dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return dt.strftime("%Y-%m-%d %H:%M")
+        return dt.strftime("%d %b %Y  %H:%M UTC")
     except Exception:
         return str(value)[:16]
 
@@ -103,7 +103,7 @@ def _render_director_signal_card(doc_id: str, signal: dict, company: dict, db) -
     pub_display = _format_announcement_datetime(signal.get("announcement_published_at"))
     if not pub_display:
         raw = signal.get("published_at") or ""
-        pub_display = raw.strftime("%Y-%m-%d") if hasattr(raw, "strftime") else str(raw)[:10]
+        pub_display = raw.strftime("%d %b %Y") if hasattr(raw, "strftime") else str(raw)[:10]
 
     agentic_status = signal.get("agentic_status") or "pending"
     agentic_rec    = signal.get("agentic_recommendation") or ""
