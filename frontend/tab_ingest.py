@@ -381,13 +381,54 @@ def render_ingest_tab(db) -> None:
             "complete":   "#4af7a0",
             "failed":     "#c0392b",
         }
+
+        def _fmt_ts(value) -> str:
+            """Format a timestamp for display regardless of type.
+
+            Firestore SERVER_TIMESTAMP fields arrive as timezone-aware datetimes;
+            job_runner sets claimed_at / processed_at as ISO 8601 strings.
+            Returns a compact local-time string: 'DD Mon HH:MM'.
+            """
+            if value is None:
+                return ""
+            try:
+                if isinstance(value, str):
+                    dt = datetime.fromisoformat(value)
+                elif hasattr(value, "tzinfo"):          # datetime (Firestore)
+                    dt = value
+                else:
+                    return str(value)
+                local_dt = dt.astimezone()              # system local timezone
+                return local_dt.strftime("%-d %b %H:%M")
+            except Exception:
+                return str(value)
+
         for job_id, job in jobs:
-            status   = job.get("status", "—")
-            ticker   = job.get("ticker", "—")
-            job_type = job.get("job_type", "lseg_ingest")
-            headline = job.get("headline") or f"[{job_type}] {job.get('company_name', '—')}"
-            colour   = status_colours.get(status, "#3d5166")
-            error    = job.get("error")
+            status      = job.get("status", "—")
+            ticker      = job.get("ticker", "—")
+            job_type    = job.get("job_type", "lseg_ingest")
+            headline    = job.get("headline") or f"[{job_type}] {job.get('company_name', '—')}"
+            colour      = status_colours.get(status, "#3d5166")
+            error       = job.get("error")
+            submitted   = _fmt_ts(job.get("submitted_at"))
+            processed   = _fmt_ts(job.get("processed_at"))
+
+            # Build the optional timestamp annotation shown after the headline.
+            if submitted and processed and status in ("complete", "failed"):
+                ts_html = (
+                    f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.62rem;'
+                    f'color:#3d5166;margin-left:0.75rem;">'
+                    f'ingested {submitted} · done {processed}</span>'
+                )
+            elif submitted:
+                ts_html = (
+                    f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.62rem;'
+                    f'color:#3d5166;margin-left:0.75rem;">'
+                    f'ingested {submitted}</span>'
+                )
+            else:
+                ts_html = ""
+
             st.markdown(
                 f'<div style="padding:0.5rem 0;border-bottom:1px solid #1a2535;">'
                 f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.65rem;'
@@ -395,6 +436,7 @@ def render_ingest_tab(db) -> None:
                 f'<span style="font-family:\'IBM Plex Mono\',monospace;font-size:0.7rem;'
                 f'color:#7eb8f7;">[{ticker}]</span>'
                 f'<span style="font-size:0.8rem;margin-left:0.5rem;color:#8aabcc;">{headline}</span>'
+                f'{ts_html}'
                 f'{f"<br><span style=\'font-size:0.7rem;color:#c0392b;margin-left:1rem;\'>{error}</span>" if error else ""}'
                 f'</div>',
                 unsafe_allow_html=True,
