@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -228,20 +229,36 @@ def call_investor_research(
         notifier_name, threshold_crossed, issuer_name, ticker
     )
 
-    try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.3,
-                max_output_tokens=1500,
-            ),
-        )
-    except Exception as e:
-        logger.error("Investor research API call failed: %s", e)
-        return _empty_result(error=str(e)), {"input": 0, "output": 0, "model": _MODEL}
+    client = genai.Client(api_key=api_key)
+    max_retries = 3
+    retry_delay = 10
+    response = None
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model=_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    temperature=0.3,
+                    max_output_tokens=1500,
+                ),
+            )
+            break
+        except Exception as e:
+            err_str = str(e)
+            if attempt < max_retries - 1 and ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str):
+                logger.warning(
+                    "Investor research rate limited (attempt %d/%d), retrying in %ds: %s",
+                    attempt + 1, max_retries, retry_delay, e,
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                logger.error("Investor research API call failed: %s", e)
+                return _empty_result(error=err_str), {"input": 0, "output": 0, "model": _MODEL}
+    if response is None:
+        return _empty_result(error="Max retries exceeded"), {"input": 0, "output": 0, "model": _MODEL}
 
     citations = _extract_grounding_citations(response)
     token_usage = _extract_token_usage(response)
