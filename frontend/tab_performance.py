@@ -64,6 +64,15 @@ _LENS_ORDER = [
     "director_disposal", "unknown",
 ]
 
+# Normalise raw stored recommendation values to canonical display labels.
+# The signal_performance collection is populated from two different sources
+# with different recommendation vocabularies; this map collapses them.
+_REC_DISPLAY = {
+    "investigate": "Act",
+    "yes":         "Act",
+    "monitor":     "Monitor",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -225,7 +234,7 @@ def _render_accuracy_table(docs: list[dict]) -> None:
 # Price position chart (where is the signal in the move?)
 # ---------------------------------------------------------------------------
 
-def _render_price_position(docs: list[dict]) -> None:
+def _render_price_position(docs: list[dict], company_map: dict) -> None:
     """
     Show the distribution of pre-signal vs post-signal price moves to indicate
     whether signals tend to be early, timely, or late relative to price action.
@@ -253,8 +262,10 @@ def _render_price_position(docs: list[dict]) -> None:
         if pre_30 is None and pre_1w is None and post_1w is None:
             continue
 
+        ticker = doc.get("ticker") or "—"
         rows.append({
-            "Ticker":    doc.get("ticker") or "—",
+            "Ticker":    ticker,
+            "Sector":    company_map.get(ticker.upper(), {}).get("sector") or "—",
             "Lens":      _lens_label(doc),
             "Date":      _signal_date_str(doc),
             "−30d→0":   pre_30,
@@ -288,21 +299,11 @@ def _render_price_position(docs: list[dict]) -> None:
 # Signal detail table
 # ---------------------------------------------------------------------------
 
-def _render_detail_table(docs: list[dict], lens_filter: str, rec_filter: str, min_window: str) -> None:
+def _render_detail_table(docs: list[dict], lens_filter: str, rec_filter: str, company_map: dict) -> None:
     st.markdown(
         '<div class="perf-section-heading">Signal Detail</div>',
         unsafe_allow_html=True,
     )
-
-    # Window filter: only show signals that have at least this post-signal window
-    _window_requirement = {
-        "Any":   None,
-        "+1w":   "post_7d",
-        "+1m":   "post_1m",
-        "+3m":   "post_3m",
-        "+6m":   "post_6m",
-    }
-    required_key = _window_requirement.get(min_window)
 
     rows = []
     for doc in docs:
@@ -310,18 +311,18 @@ def _render_detail_table(docs: list[dict], lens_filter: str, rec_filter: str, mi
         if lens_filter != "All" and _LENS_LABELS.get(lt, lt) != lens_filter:
             continue
         if rec_filter != "All":
-            doc_rec = (doc.get("recommendation") or "").split()[0].title()
+            doc_rec = _REC_DISPLAY.get((doc.get("recommendation") or "").split()[0].lower())
             if doc_rec != rec_filter:
                 continue
-        if required_key and _snap_pct(doc, required_key) is None:
-            continue
 
+        ticker = doc.get("ticker") or "—"
         rows.append({
-            "Ticker":    doc.get("ticker") or "—",
+            "Ticker":    ticker,
             "Company":   (doc.get("company_name") or "")[:28],
+            "Sector":    company_map.get(ticker.upper(), {}).get("sector") or "—",
             "Lens":      _lens_label(doc),
             "Date":      _signal_date_str(doc),
-            "Rec":       (doc.get("recommendation") or "—").title(),
+            "Rec":       _REC_DISPLAY.get((doc.get("recommendation") or "").split()[0].lower()) or (doc.get("recommendation") or "—").title(),
             "Price (p)": _snap_price(doc, "baseline"),
             "−30d":      _snap_pct(doc, "pre_30d"),
             "−1w":       _snap_pct(doc, "pre_1w"),
@@ -372,7 +373,7 @@ def _render_detail_table(docs: list[dict], lens_filter: str, rec_filter: str, mi
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def render_performance_tab(db) -> None:
+def render_performance_tab(db, company_map: dict) -> None:
     perf_docs = get_signal_performance(db)
 
     if not perf_docs:
@@ -380,7 +381,7 @@ def render_performance_tab(db) -> None:
         return
 
     # --- Filter bar ---
-    col_l, col_r, col_w, col_spacer = st.columns([2, 2, 2, 4])
+    col_l, col_r, col_spacer = st.columns([2, 2, 8])
     with col_l:
         lens_options = ["All"] + [
             _LENS_LABELS[lt] for lt in _LENS_ORDER
@@ -388,28 +389,24 @@ def render_performance_tab(db) -> None:
         ]
         lens_filter = st.selectbox("Lens", lens_options, key="perf_lens_filter", label_visibility="collapsed")
     with col_r:
-        # Collect recommendation values present in the data (first word, title-cased)
+        # Normalise raw recommendation values to canonical display labels before
+        # building options — collapses "investigate"/"yes" → "Act", "monitor" → "Monitor".
         all_recs = sorted({
-            (d.get("recommendation") or "").split()[0].title()
+            _REC_DISPLAY.get((d.get("recommendation") or "").split()[0].lower(), "")
             for d in perf_docs
             if (d.get("recommendation") or "").strip()
-        })
+        } - {""})
         rec_options = ["All"] + all_recs
         rec_filter = st.selectbox("Recommendation", rec_options, key="perf_rec_filter", label_visibility="collapsed")
-    with col_w:
-        min_window = st.selectbox(
-            "Min data", ["Any", "+1w", "+1m", "+3m", "+6m"],
-            key="perf_window_filter", label_visibility="collapsed"
-        )
 
-    # Apply lens + rec filters to summary and position sections too
+    # Apply lens + rec filters to summary, accuracy, and position sections
     filtered = perf_docs
     if lens_filter != "All":
         filtered = [d for d in filtered if _lens_label(d) == lens_filter]
     if rec_filter != "All":
         filtered = [
             d for d in filtered
-            if (d.get("recommendation") or "").split()[0].title() == rec_filter
+            if _REC_DISPLAY.get((d.get("recommendation") or "").split()[0].lower()) == rec_filter
         ]
 
     # --- Summary metrics ---
@@ -441,9 +438,9 @@ def render_performance_tab(db) -> None:
     st.markdown("---")
 
     # --- Price position ---
-    _render_price_position(filtered)
+    _render_price_position(filtered, company_map)
 
     st.markdown("---")
 
     # --- Signal detail ---
-    _render_detail_table(perf_docs, lens_filter, rec_filter, min_window)
+    _render_detail_table(perf_docs, lens_filter, rec_filter, company_map)

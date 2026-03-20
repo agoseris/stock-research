@@ -15,7 +15,7 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-VERSION = "2.61"
+VERSION = "2.62"
 
 # ── Page config ─────────────────────────────────────────────────────────────────
 
@@ -544,7 +544,7 @@ with tab_ingest:
 # ── Performance tab ──────────────────────────────────────────────────────────────
 
 with tab_performance:
-    render_performance_tab(db)
+    render_performance_tab(db, company_map)
 
 # ── Config tab ───────────────────────────────────────────────────────────────────
 
