@@ -278,6 +278,17 @@ class UniverseStorageProviderBase(ABC):
         """Upsert a single company without affecting other universe documents."""
         pass
 
+    @abstractmethod
+    def patch_company_fields(self, ticker_lse: str, fields: dict) -> None:
+        """
+        Partial-update specific fields on a company document.
+
+        Uses a merge/update strategy — only the supplied fields are written;
+        all other fields (signal state, position state, etc.) are preserved.
+        No-ops silently if the company does not exist.
+        """
+        pass
+
     # --- Signal / position state ---
 
     @abstractmethod

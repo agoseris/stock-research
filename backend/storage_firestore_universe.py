@@ -291,6 +291,19 @@ class FirestoreUniverseProvider(UniverseStorageProviderBase):
         except Exception as e:
             print(f"  [FirestoreUniverse] save_company({company.ticker_lse}) failed: {e}")
 
+    def patch_company_fields(self, ticker_lse: str, fields: dict) -> None:
+        """
+        Partial-update specific fields on a company document.
+
+        Uses Firestore .update() — only the supplied keys are written;
+        all other fields are preserved. No-ops silently if the document
+        does not exist (Firestore raises NotFound; we absorb it).
+        """
+        try:
+            self.db.collection(self.UNIVERSE_COLLECTION).document(ticker_lse).update(fields)
+        except Exception as e:
+            print(f"  [FirestoreUniverse] patch_company_fields({ticker_lse}) failed: {e}")
+
     # --- Signal / position state ---
 
     def update_signal_state(
