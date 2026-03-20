@@ -60,7 +60,12 @@ from signal_state import (
     int_strength_to_unified,
     classify_signal_strength_unified,
 )
-from storage_firestore import FirestoreProvider
+from storage_firestore import (
+    FirestoreProvider,
+    extract_catalyst_field,
+    classify_catalyst_strength,
+    map_catalyst_recommendation,
+)
 from storage_firestore_universe import FirestoreUniverseProvider
 from telegram_notifier import TelegramNotifier
 
@@ -347,6 +352,9 @@ REASON: [one sentence]"""
                 )
 
                 # Telegram notification — 'act' threshold only
+                recommendation = _map_director_recommendation(
+                    simple_result.get("RECOMMENDED_ACTION", "")
+                )
                 notification_payload = {
                     **simple_result,
                     "ticker": ticker,
@@ -354,6 +362,9 @@ REASON: [one sentence]"""
                     "headline": announcement.headline,
                     "source_url": announcement.source_url,
                     "announcement_published_at": str(announcement.published_at),
+                    "lens_id": "director_purchasing",
+                    "signal_strength": signal_strength,
+                    "recommendation": recommendation,
                 }
                 self._notify_director_signal(notification_payload)
 
@@ -443,12 +454,18 @@ REASON: [one sentence]"""
             )
 
             # Telegram notification — 'act' threshold only
+            recommendation = _map_tr1_recommendation(
+                simple_result.get("recommendation", "")
+            )
             tr1_signal_payload = {
                 **tr1_data,
                 "headline": announcement.headline,
                 "source_url": announcement.source_url,
                 "announcement_published_at": str(announcement.published_at),
                 "simple_lens_result": simple_result,
+                "lens_id": "tr1_accumulation",
+                "signal_strength": strength,
+                "recommendation": recommendation,
             }
             self._notify_tr1_signal(tr1_signal_payload)
 
@@ -463,15 +480,16 @@ REASON: [one sentence]"""
 
     def _notify_signal(self, result: dict):
         """Send Telegram notification for high-confidence signal results."""
-        analysis = result.get("llm_analysis", "")
-        for line in analysis.splitlines():
-            if "RECOMMENDED_ACTION" in line:
-                value = line.split(":", 1)[-1].strip().lower()
-                if value == "yes":
-                    self.notifier.send(self.notifier.format_signal(result), priority="high")
-                elif value == "monitor":
-                    self.notifier.send(self.notifier.format_signal(result), priority="normal")
-                break
+        analysis      = result.get("llm_analysis", "")
+        action_raw    = extract_catalyst_field(analysis, "RECOMMENDED_ACTION")
+        relevance_raw = extract_catalyst_field(analysis, "RELEVANCE")
+        recommendation = map_catalyst_recommendation(action_raw)
+        result["lens_id"]         = "regulatory_catalyst"
+        result["recommendation"]  = recommendation
+        result["signal_strength"] = classify_catalyst_strength(action_raw, relevance_raw)
+        if recommendation in ("act", "monitor"):
+            priority = "high" if recommendation == "act" else "normal"
+            self.notifier.send(self.notifier.format_unified_signal(result), priority=priority)
 
     def _notify_discovery(self, result: dict):
         """Send Telegram notification for discovery results worth considering."""
@@ -589,13 +607,10 @@ REASON: [one sentence]"""
 
     def _notify_director_signal(self, result: dict) -> None:
         """Send Telegram notification for a Director purchasing signal if recommendation is 'act'."""
-        # result contains simple_* prefixed fields and announcement metadata
-        rec_raw = result.get("simple_recommended_action", "")
-        rec_norm = _map_director_recommendation(rec_raw)
-        if rec_norm == "act":
+        if result.get("recommendation") == "act":
             try:
                 self.notifier.send(
-                    self.notifier.format_director_signal(result),
+                    self.notifier.format_unified_signal(result),
                     priority="high",
                 )
             except Exception as e:
@@ -604,13 +619,10 @@ REASON: [one sentence]"""
 
     def _notify_tr1_signal(self, result: dict) -> None:
         """Send Telegram notification for a TR-1 crossing signal if recommendation is 'act'."""
-        simple_result = result.get("simple_lens_result") or {}
-        rec_raw = simple_result.get("recommendation", "")
-        rec_norm = _map_tr1_recommendation(rec_raw)
-        if rec_norm == "act":
+        if result.get("recommendation") == "act":
             try:
                 self.notifier.send(
-                    self.notifier.format_tr1_signal(result),
+                    self.notifier.format_unified_signal(result),
                     priority="high",
                 )
             except Exception as e:

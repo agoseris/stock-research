@@ -74,6 +74,11 @@ from utilities.orchestrator.layer_runner import (
 )
 from utilities.orchestrator.synthesis import run_synthesis
 from utilities.orchestrator.lens_tr1_investor_research import run_tr1_investor_research
+from utilities.orchestrator.persistence import (
+    int_strength_to_unified,
+    map_director_recommendation,
+    map_tr1_recommendation,
+)
 
 # TelegramNotifier is in backend/ — add it to sys.path if not already present
 _BACKEND_DIR = str(_REPO_ROOT / "backend")
@@ -256,12 +261,18 @@ def process_tr1_signal(
             and confidence in ("high", "medium")
         ):
             try:
+                simple_lens = signal_data.get("simple_lens_result") or {}
                 tr1_payload = {
                     **signal_data,
                     "investor_research_result": result,
+                    "lens_id": "tr1_accumulation",
+                    "signal_strength": simple_lens.get("signal_strength", "noise"),
+                    "recommendation": map_tr1_recommendation(
+                        simple_lens.get("recommendation", "")
+                    ),
                 }
                 _notifier.send(
-                    _notifier.format_tr1_signal(tr1_payload),
+                    _notifier.format_unified_signal(tr1_payload),
                     priority="high",
                 )
                 logger.info("[%s] Telegram TR-1 agentic notification sent.", ticker)
@@ -388,9 +399,14 @@ def process_signal(
                     # Enrich with agentic recommendation fields for notifier
                     "simple_recommended_action": rec,
                     "simple_summary": synthesis_result.get("recommendation_justification", ""),
+                    "lens_id": "director_purchasing",
+                    "signal_strength": int_strength_to_unified(
+                        signal_data.get("simple_signal_strength")
+                    ),
+                    "recommendation": map_director_recommendation(rec),
                 }
                 _notifier.send(
-                    _notifier.format_director_signal(director_payload),
+                    _notifier.format_unified_signal(director_payload),
                     priority="high",
                 )
                 logger.info("[%s] Telegram Director agentic notification sent.", ticker)

@@ -256,7 +256,7 @@ def persist_news_summary(
 # Unified schema helpers
 # ---------------------------------------------------------------------------
 
-def _int_strength_to_unified(val) -> str:
+def int_strength_to_unified(val) -> str:
     """Map integer 1–10 strength score to unified string scale."""
     if val is None:
         return "noise"
@@ -275,7 +275,7 @@ def _int_strength_to_unified(val) -> str:
         return "noise"
 
 
-def _map_director_recommendation(rec: str) -> str:
+def map_director_recommendation(rec: str) -> str:
     """Map Director simple / synthesis recommendation to unified value."""
     r = (rec or "").strip().lower()
     if r in ("investigate further", "investigate"):
@@ -285,7 +285,7 @@ def _map_director_recommendation(rec: str) -> str:
     return "ignore"
 
 
-def _map_tr1_recommendation(rec: str) -> str:
+def map_tr1_recommendation(rec: str) -> str:
     """Map TR-1 simple lens recommendation to unified value."""
     r = (rec or "").strip().lower()
     if r == "investigate":
@@ -310,8 +310,8 @@ def _build_unified_director_doc(
     The agentic fields are written later by persist_synthesis_result.
     """
     strength_int = simple_result.get("SIGNAL_STRENGTH")
-    signal_strength = _int_strength_to_unified(strength_int)
-    recommendation = _map_director_recommendation(
+    signal_strength = int_strength_to_unified(strength_int)
+    recommendation = map_director_recommendation(
         simple_result.get("RECOMMENDED_ACTION", "")
     )
 
@@ -363,7 +363,7 @@ def _build_unified_tr1_doc(
     if signal_strength not in _VALID:
         signal_strength = "noise"
 
-    recommendation = _map_tr1_recommendation(simple_result.get("recommendation", ""))
+    recommendation = map_tr1_recommendation(simple_result.get("recommendation", ""))
 
     tr1_extraction_fields = {
         "notifier_name": tr1_data.get("notifier_name"),

@@ -5,7 +5,12 @@ from typing import List, Optional, Tuple
 from abstractions import Announcement, StorageProviderBase, UniverseStorageProviderBase
 from lens_regulatory_catalyst import RegulatoryCatalystLens
 from llm_gemini import GeminiProvider
-from storage_firestore import FirestoreProvider
+from storage_firestore import (
+    FirestoreProvider,
+    extract_catalyst_field,
+    classify_catalyst_strength,
+    map_catalyst_recommendation,
+)
 from signal_state import (
     classify_signal_strength,
     is_negative_signal,
@@ -394,14 +399,15 @@ REASON: [one sentence]"""
 
         for r in signal_results:
             analysis = r.get("llm_analysis", "")
-            for line in analysis.splitlines():
-                if "RECOMMENDED_ACTION" in line:
-                    value = line.split(":", 1)[-1].strip().lower()
-                    if value == "yes":
-                        self.notifier.send(self.notifier.format_signal(r), priority="high")
-                    elif value == "monitor":
-                        self.notifier.send(self.notifier.format_signal(r), priority="normal")
-                    break
+            action_raw    = extract_catalyst_field(analysis, "RECOMMENDED_ACTION")
+            relevance_raw = extract_catalyst_field(analysis, "RELEVANCE")
+            recommendation = map_catalyst_recommendation(action_raw)
+            r["lens_id"]        = "regulatory_catalyst"
+            r["recommendation"] = recommendation
+            r["signal_strength"] = classify_catalyst_strength(action_raw, relevance_raw)
+            if recommendation in ("act", "monitor"):
+                priority = "high" if recommendation == "act" else "normal"
+                self.notifier.send(self.notifier.format_unified_signal(r), priority=priority)
 
         for r in discovery_results:
             disc_assessment = r.get("discovery_assessment", "")

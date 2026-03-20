@@ -6,6 +6,13 @@ import os
 
 load_dotenv(find_dotenv())
 
+_LENS_LABELS = {
+    "regulatory_catalyst": ("🔔", "CATALYST"),
+    "director_purchasing":  ("📈", "DIR PURCHASE"),
+    "tr1_accumulation":     ("🏦", "TR-1 CROSSING"),
+}
+
+
 class TelegramNotifier(NotificationProviderBase):
     """Notification channel implementation using Telegram.
     Implements NotificationProviderBase so this can be swapped
@@ -37,33 +44,64 @@ class TelegramNotifier(NotificationProviderBase):
             print(f"Telegram send error: {e}")
             return False
 
-    def format_signal(self, result: dict) -> str:
-        """Format a signal queue result as a Telegram message."""
+    # ------------------------------------------------------------------
+    # Unified entry point
+    # ------------------------------------------------------------------
+
+    def format_unified_signal(self, result: dict) -> str:
+        """
+        Build a complete Telegram message for any lens signal.
+
+        The title is assembled from canonical fields that must be present
+        in result before this is called:
+          - lens_id        e.g. "director_purchasing"
+          - ticker         e.g. "ESNT"
+          - recommendation "act" | "monitor" | "ignore"
+          - signal_strength "strong" | "substantial" | "moderate" | "weak" | "noise"
+
+        The body is delegated to a per-lens method.
+        """
+        lens_id  = result.get("lens_id", "")
+        emoji, label = _LENS_LABELS.get(lens_id, ("🔔", "SIGNAL"))
+        ticker   = result.get("ticker", "Unknown")
+        action   = (result.get("recommendation") or "unknown").upper()
+        strength = (result.get("signal_strength") or "unknown").upper()
+        title    = f"{emoji} *{label} | {ticker} | {action} | {strength}*\n\n"
+
+        if lens_id == "director_purchasing":
+            body = self._format_director_body(result)
+        elif lens_id == "tr1_accumulation":
+            body = self._format_tr1_body(result)
+        else:
+            body = self._format_catalyst_body(result)
+
+        return title + body
+
+    # ------------------------------------------------------------------
+    # Per-lens body formatters (title excluded)
+    # ------------------------------------------------------------------
+
+    def _format_catalyst_body(self, result: dict) -> str:
+        """Body for a regulatory catalyst signal."""
         analysis = result.get("llm_analysis", "")
         source_url = result.get("source_url", "")
         raw_headline = result.get("headline", "")[:100]
 
-        # Extract key fields from structured LLM response
         def extract(field):
             for line in analysis.splitlines():
                 if line.startswith(f"{field}:"):
                     return line.split(":", 1)[1].strip()
             return "Unknown"
 
-        relevance = extract("RELEVANCE")
-        signal_type = extract("SIGNAL_TYPE")
-        action = extract("RECOMMENDED_ACTION")
-        summary = extract("SUMMARY")
+        relevance        = extract("RELEVANCE")
+        signal_type      = extract("SIGNAL_TYPE")
+        action           = extract("RECOMMENDED_ACTION")
+        summary          = extract("SUMMARY")
         source_reliability = extract("SOURCE_RELIABILITY")
 
-        # Headline as clickable link — strip chars that break legacy Markdown link syntax
         safe_headline = raw_headline.replace("[", "").replace("]", "").replace("*", "").replace("_", "")
-        if source_url:
-            headline_display = f"[{safe_headline}]({source_url})"
-        else:
-            headline_display = safe_headline
+        headline_display = f"[{safe_headline}]({source_url})" if source_url else safe_headline
 
-        # Market cap: stored as raw GBP (e.g. 45_300_000), display in £m / £bn
         market_cap = result.get("market_cap_gbp")
         if market_cap:
             m = market_cap / 1_000_000
@@ -71,8 +109,7 @@ class TelegramNotifier(NotificationProviderBase):
         else:
             market_cap_str = "Unknown"
 
-        # Price from LSEG index page (pence)
-        price_pence = result.get("price_pence")
+        price_pence  = result.get("price_pence")
         price_change = result.get("price_change")
         if price_pence is not None:
             price_str = f"{price_pence:.1f}p"
@@ -82,7 +119,6 @@ class TelegramNotifier(NotificationProviderBase):
             price_str = "Unknown"
 
         return (
-            f"🔔 *SIGNAL DETECTED*\n\n"
             f"*Company:* {result.get('company_name', 'Unknown')}\n"
             f"*Ticker:* {result.get('ticker', 'Unknown')}\n"
             f"*Headline:* {headline_display}\n"
@@ -96,40 +132,24 @@ class TelegramNotifier(NotificationProviderBase):
             f"*Published:* {result.get('published_at', 'Unknown')}"
         )
 
-    def format_director_signal(self, result: dict) -> str:
-        """
-        Format a director purchasing signal for Telegram.
-
-        Parameters
-        ----------
-        result : dict
-            Combined dict from signals doc + announcement metadata.
-            Expected keys: ticker, company_name, headline, source_url,
-            published_at (or announcement_published_at),
-            simple_recommended_action, simple_summary,
-            simple_transaction_nature, simple_signal_strength,
-            simple_position_change_pct.
-        """
-        source_url = result.get("source_url", "")
+    def _format_director_body(self, result: dict) -> str:
+        """Body for a director purchasing signal."""
+        source_url   = result.get("source_url", "")
         raw_headline = (result.get("headline", "") or "")[:100]
-        recommendation = result.get("simple_recommended_action", "Unknown")
-        summary = (result.get("simple_summary", "") or "")[:400]
-        strength = result.get("simple_signal_strength")
-        nature = result.get("simple_transaction_nature", "")
-        pos_change = result.get("simple_position_change_pct")
-        published = result.get("announcement_published_at") or result.get("published_at", "Unknown")
+        recommendation = result.get("simple_recommended_action", result.get("RECOMMENDED_ACTION", "Unknown"))
+        summary      = (result.get("simple_summary", result.get("SUMMARY", "")) or "")[:400]
+        strength_raw = result.get("simple_signal_strength", result.get("SIGNAL_STRENGTH"))
+        nature       = result.get("simple_transaction_nature", result.get("TRANSACTION_NATURE", ""))
+        pos_change   = result.get("simple_position_change_pct", result.get("POSITION_CHANGE_PCT"))
+        published    = result.get("announcement_published_at") or result.get("published_at", "Unknown")
 
         safe_headline = raw_headline.replace("[", "").replace("]", "").replace("*", "").replace("_", "")
-        if source_url:
-            headline_display = f"[{safe_headline}]({source_url})"
-        else:
-            headline_display = safe_headline
+        headline_display = f"[{safe_headline}]({source_url})" if source_url else safe_headline
 
-        strength_str = f"{strength}/10" if strength is not None else "?"
-        change_str = f" ({pos_change:+.0f}%)" if pos_change is not None else ""
+        strength_str = f"{strength_raw}/10" if strength_raw is not None else "?"
+        change_str   = f" ({pos_change:+.0f}%)" if pos_change is not None else ""
 
         return (
-            f"📈 *DIRECTOR PURCHASE SIGNAL*\n\n"
             f"*Company:* {result.get('company_name', 'Unknown')}\n"
             f"*Ticker:* {result.get('ticker', 'Unknown')}\n"
             f"*Headline:* {headline_display}\n"
@@ -140,45 +160,28 @@ class TelegramNotifier(NotificationProviderBase):
             f"*Published:* {published}"
         )
 
-    def format_tr1_signal(self, result: dict) -> str:
-        """
-        Format a TR-1 crossing signal for Telegram.
-
-        Parameters
-        ----------
-        result : dict
-            Combined dict from signals doc + announcement metadata.
-            Expected keys: ticker, company_name, headline, source_url,
-            published_at (or announcement_published_at), notifier_name,
-            direction, old_holding_pct, new_holding_pct, threshold_crossed,
-            simple_lens_result (map with recommendation, rationale, signal_strength).
-        """
-        source_url = result.get("source_url", "")
-        raw_headline = (result.get("headline", "") or "")[:100]
+    def _format_tr1_body(self, result: dict) -> str:
+        """Body for a TR-1 crossing signal."""
+        source_url    = result.get("source_url", "")
+        raw_headline  = (result.get("headline", "") or "")[:100]
         simple_result = result.get("simple_lens_result") or {}
         recommendation = simple_result.get("recommendation", "Unknown")
-        rationale = (simple_result.get("rationale", "") or "")[:400]
-        strength = simple_result.get("signal_strength", "?")
-        notifier = (result.get("notifier_name", "") or "Unknown")[:60]
-        direction = result.get("direction", "unknown")
-        old_pct = result.get("old_holding_pct")
-        new_pct = result.get("new_holding_pct")
-        threshold = result.get("threshold_crossed")
-        published = result.get("announcement_published_at") or result.get("published_at", "Unknown")
+        rationale     = (simple_result.get("rationale", "") or "")[:400]
+        strength      = simple_result.get("signal_strength", "?")
+        notifier      = (result.get("notifier_name", "") or "Unknown")[:60]
+        direction     = result.get("direction", "unknown")
+        old_pct       = result.get("old_holding_pct")
+        new_pct       = result.get("new_holding_pct")
+        threshold     = result.get("threshold_crossed")
+        published     = result.get("announcement_published_at") or result.get("published_at", "Unknown")
 
         safe_headline = raw_headline.replace("[", "").replace("]", "").replace("*", "").replace("_", "")
-        if source_url:
-            headline_display = f"[{safe_headline}]({source_url})"
-        else:
-            headline_display = safe_headline
+        headline_display = f"[{safe_headline}]({source_url})" if source_url else safe_headline
 
-        holding_str = ""
-        if old_pct is not None and new_pct is not None:
-            holding_str = f"\n*Holding:* {old_pct:.2f}% → {new_pct:.2f}%"
+        holding_str   = f"\n*Holding:* {old_pct:.2f}% → {new_pct:.2f}%" if old_pct is not None and new_pct is not None else ""
         threshold_str = f"\n*Threshold:* {threshold:.0f}%" if threshold else ""
 
         return (
-            f"🏦 *TR-1 CROSSING SIGNAL*\n\n"
             f"*Company:* {result.get('company_name', 'Unknown')}\n"
             f"*Ticker:* {result.get('ticker', 'Unknown')}\n"
             f"*Headline:* {headline_display}\n"
@@ -189,20 +192,27 @@ class TelegramNotifier(NotificationProviderBase):
             f"*Published:* {published}"
         )
 
-    def format_unified_signal(self, result: dict) -> str:
-        """
-        Dispatch to the correct formatter based on lens_id.
+    # ------------------------------------------------------------------
+    # Legacy public formatters — delegate to format_unified_signal
+    # ------------------------------------------------------------------
 
-        Falls back to format_signal (regulatory catalyst) for unknown lens_ids
-        or documents without a lens_id (legacy signal_results format).
-        """
-        lens_id = result.get("lens_id", "")
-        if lens_id == "director_purchasing":
-            return self.format_director_signal(result)
-        if lens_id == "tr1_accumulation":
-            return self.format_tr1_signal(result)
-        # Default: regulatory catalyst or legacy llm_analysis blob format
-        return self.format_signal(result)
+    def format_signal(self, result: dict) -> str:
+        """Format a regulatory catalyst signal. Delegates to format_unified_signal."""
+        if "lens_id" not in result:
+            result = {**result, "lens_id": "regulatory_catalyst"}
+        return self.format_unified_signal(result)
+
+    def format_director_signal(self, result: dict) -> str:
+        """Format a director purchasing signal. Delegates to format_unified_signal."""
+        if "lens_id" not in result:
+            result = {**result, "lens_id": "director_purchasing"}
+        return self.format_unified_signal(result)
+
+    def format_tr1_signal(self, result: dict) -> str:
+        """Format a TR-1 crossing signal. Delegates to format_unified_signal."""
+        if "lens_id" not in result:
+            result = {**result, "lens_id": "tr1_accumulation"}
+        return self.format_unified_signal(result)
 
     def format_discovery(self, result: dict) -> str:
         """Format a discovery queue result as a Telegram message."""
@@ -214,11 +224,11 @@ class TelegramNotifier(NotificationProviderBase):
                     return line.split(":", 1)[1].strip()
             return "Unknown"
 
-        company = extract("COMPANY")
-        small_cap = extract("SMALL_CAP")
+        company    = extract("COMPANY")
+        small_cap  = extract("SMALL_CAP")
         thesis_fit = extract("THESIS_FIT")
-        recommend = extract("RECOMMEND_ADD")
-        reason = extract("REASON")
+        recommend  = extract("RECOMMEND_ADD")
+        reason     = extract("REASON")
 
         return (
             f"🔍 *DISCOVERY: Consider Adding to Universe*\n\n"

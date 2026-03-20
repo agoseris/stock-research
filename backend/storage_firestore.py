@@ -30,7 +30,7 @@ load_dotenv(find_dotenv())
 # Regulatory catalyst transform helpers
 # ---------------------------------------------------------------------------
 
-def _extract_catalyst_field(blob: str, field: str) -> str:
+def extract_catalyst_field(blob: str, field: str) -> str:
     """Extract a labeled field from an LLM analysis blob (FIELD: value)."""
     for line in (blob or "").splitlines():
         stripped = line.strip()
@@ -72,7 +72,7 @@ def _int_strength_to_unified(val) -> str:
         return "noise"
 
 
-def _classify_catalyst_strength(action: str, relevance_raw: str) -> str:
+def classify_catalyst_strength(action: str, relevance_raw: str) -> str:
     """Derive unified signal_strength from RELEVANCE score; fall back to action."""
     score = _parse_relevance_score(relevance_raw)
     if score is not None:
@@ -85,7 +85,7 @@ def _classify_catalyst_strength(action: str, relevance_raw: str) -> str:
     return "noise"
 
 
-def _map_catalyst_recommendation(action: str) -> str:
+def map_catalyst_recommendation(action: str) -> str:
     """Map RECOMMENDED_ACTION (Yes/No/Monitor) to unified recommendation."""
     a = (action or "").strip().lower()
     if a == "yes":
@@ -215,17 +215,17 @@ class FirestoreProvider(StorageProviderBase):
         """
         analysis = result.get("llm_analysis", "")
 
-        action_raw          = _extract_catalyst_field(analysis, "RECOMMENDED_ACTION")
-        relevance_raw       = _extract_catalyst_field(analysis, "RELEVANCE")
-        confidence_raw      = _extract_catalyst_field(analysis, "CONFIDENCE_SIGNAL")
-        summary_raw         = _extract_catalyst_field(analysis, "SUMMARY")
-        signal_type_raw     = _extract_catalyst_field(analysis, "SIGNAL_TYPE") or "regulatory_catalyst"
-        source_rel_raw      = _extract_catalyst_field(analysis, "SOURCE_RELIABILITY")
-        outcome_raw         = _extract_catalyst_field(analysis, "OUTCOME_PROBABILITY")
-        market_mispricing   = _extract_catalyst_field(analysis, "MARKET_MISPRICING")
+        action_raw          = extract_catalyst_field(analysis, "RECOMMENDED_ACTION")
+        relevance_raw       = extract_catalyst_field(analysis, "RELEVANCE")
+        confidence_raw      = extract_catalyst_field(analysis, "CONFIDENCE_SIGNAL")
+        summary_raw         = extract_catalyst_field(analysis, "SUMMARY")
+        signal_type_raw     = extract_catalyst_field(analysis, "SIGNAL_TYPE") or "regulatory_catalyst"
+        source_rel_raw      = extract_catalyst_field(analysis, "SOURCE_RELIABILITY")
+        outcome_raw         = extract_catalyst_field(analysis, "OUTCOME_PROBABILITY")
+        market_mispricing   = extract_catalyst_field(analysis, "MARKET_MISPRICING")
 
-        recommendation  = _map_catalyst_recommendation(action_raw)
-        signal_strength = _classify_catalyst_strength(action_raw, relevance_raw)
+        recommendation  = map_catalyst_recommendation(action_raw)
+        signal_strength = classify_catalyst_strength(action_raw, relevance_raw)
 
         key_text   = result.get("source_url") or result.get("headline", "")
         unified_id = self._fingerprint(key_text) if key_text else hashlib.sha256(
