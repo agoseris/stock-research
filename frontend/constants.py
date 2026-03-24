@@ -50,8 +50,25 @@ class LegacyRec:
     NO          = "no"           # Maps to Rec.IGNORE
     IGNORE      = "ignore"       # Maps to Rec.IGNORE
 
-_CONFIG_COLLECTION = "app_config"
-_LSEG_FILTERS_DOC = "lseg_filters"
+# ── Firestore collection names ────────────────────────────────────────────────
+# All collection names used by the frontend are declared here.
+# Never use inline string literals — reference these constants instead.
+
+_CONFIG_COLLECTION     = "app_config"
+_LSEG_FILTERS_DOC      = "lseg_filters"
+
+# ── Firestore subcollection names ────────────────────────────────────────────
+_SUBCOL_SIGNAL_HISTORY   = "signal_history"    # Append-only signal state transition log
+_SUBCOL_POSITION_HISTORY = "position_history"  # Append-only position state transition log
+
+# ── Top-level collection names ────────────────────────────────────────────────
+_COL_SIGNALS_UNIFIED   = "signals_unified"     # Regulatory catalyst + TR-1 signals
+_COL_SIGNALS           = "signals"             # Director buying signals (legacy collection)
+_COL_DISCOVERY_RESULTS = "discovery_results"   # Non-universe companies surfaced by pipeline
+_COL_UNIVERSE          = "universe_companies"  # Monitored company list
+_COL_PENDING_JOBS      = "pending_jobs"        # Interactive ingestion job queue
+_COL_ANNOUNCEMENTS     = "announcements"       # SHA-256 deduplication fingerprints
+_COL_SIGNAL_PERF       = "signal_performance"  # Price-movement snapshots (backend cron)
 
 _DEFAULT_EXCLUDED_TYPES = [
     "Notice of AGM",
