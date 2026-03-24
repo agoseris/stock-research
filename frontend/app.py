@@ -33,7 +33,7 @@ apply_styles()
 
 # ── Module imports ───────────────────────────────────────────────────────────────
 
-from constants import EMOJI_MUTE
+from constants import EMOJI_MUTE, PositionState, LegacyRec
 from firestore_helpers import (
     get_db,
     get_signal_results,
@@ -97,7 +97,7 @@ company_map = {
 # result set and fetches their most recent signal directly.
 _priority_tickers = {
     t for t, c in company_map.items()
-    if c.get("position_state") in ("acted", "deferred")
+    if c.get("position_state") in (PositionState.ACTED, PositionState.DEFERRED)
 }
 _loaded_tickers = {(r.get("ticker") or "").upper() for _, r in signals}
 for _t in sorted(_priority_tickers - _loaded_tickers):
@@ -108,11 +108,11 @@ for _t in sorted(_priority_tickers - _loaded_tickers):
 # Count actionable items — across all lenses
 action_count = sum(
     1 for _, r in signals
-    if get_field(r.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower() == "yes"
+    if get_field(r.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower() == LegacyRec.YES
 )
 monitor_count = sum(
     1 for _, r in signals
-    if get_field(r.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower() == "monitor"
+    if get_field(r.get("llm_analysis", ""), "RECOMMENDED_ACTION").lower() == LegacyRec.MONITOR
 )
 
 # Director / TR-1 signals: recommendation from simple_lens_result or simple_recommended_action
@@ -122,14 +122,14 @@ for _, r in (director_signals or []):
         or r.get("simple_recommended_action")                        # director buying
         or ""
     ).lower()
-    if _simple_rec.startswith("investigate"):
+    if _simple_rec.startswith(LegacyRec.INVESTIGATE):
         action_count += 1
-    elif _simple_rec.startswith("monitor"):
+    elif _simple_rec.startswith(LegacyRec.MONITOR):
         monitor_count += 1
 
 discovery_count = sum(
     1 for _, r in discoveries
-    if get_field(r.get("discovery_assessment", ""), "RECOMMEND_ADD").lower() in ("yes", "maybe")
+    if get_field(r.get("discovery_assessment", ""), "RECOMMEND_ADD").lower() in (LegacyRec.YES, "maybe")
 )
 
 # ── Stat bar ─────────────────────────────────────────────────────────────────────

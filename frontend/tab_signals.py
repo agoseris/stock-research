@@ -18,6 +18,7 @@ from ui_helpers import (
     format_price_info,
     format_timestamp,
 )
+from constants import PositionState, SignalState, Rec, LegacyRec
 
 
 # ---------------------------------------------------------------------------
@@ -27,11 +28,13 @@ from ui_helpers import (
 def _director_rec_class(rec: str) -> str:
     """Map agentic_recommendation to CSS card class suffix."""
     r = (rec or "").lower()
-    if "investigate" in r:
+    # Director lens may return multi-word phrases (e.g. "Investigate Further"),
+    # so substring checks are intentional here.
+    if LegacyRec.INVESTIGATE in r:
         return "director-investigate"
-    if "monitor" in r:
+    if LegacyRec.MONITOR in r:
         return "director-monitor"
-    if "ignore" in r:
+    if LegacyRec.IGNORE in r:
         return "director-ignore"
     return "director-pending"
 
@@ -40,13 +43,13 @@ def _director_rec_badge(rec: str, agentic_status: str) -> str:
     """Return HTML badge for director recommendation or agentic status."""
     if agentic_status == "complete" and rec:
         r = rec.lower()
-        if "investigate" in r:
+        if LegacyRec.INVESTIGATE in r:
             css = "badge badge-director-investigate"
             label = "Investigate Further"
-        elif "monitor" in r:
+        elif LegacyRec.MONITOR in r:
             css = "badge badge-director-monitor"
             label = "Monitor"
-        elif "ignore" in r:
+        elif LegacyRec.IGNORE in r:
             css = "badge badge-director-ignore"
             label = "Ignore"
         else:
@@ -69,9 +72,9 @@ def _director_rec_badge(rec: str, agentic_status: str) -> str:
 def _simple_rec_badge(simple_rec: str) -> str:
     """Return HTML badge for simple lens recommended action."""
     r = (simple_rec or "").lower()
-    if "investigate" in r or r == "yes":
+    if LegacyRec.INVESTIGATE in r or r == LegacyRec.YES:
         css, label = "badge badge-yes", "Simple: Investigate"
-    elif "monitor" in r:
+    elif LegacyRec.MONITOR in r:
         css, label = "badge badge-monitor", "Simple: Monitor"
     else:
         css, label = "badge badge-no", "Simple: Pass"
@@ -109,7 +112,7 @@ def _render_director_signal_card(doc_id: str, signal: dict, company: dict, db) -
     agentic_rec    = signal.get("agentic_recommendation") or ""
     simple_rec     = signal.get("simple_recommended_action") or ""
 
-    sig_state = company.get("signal_state") or "watching"
+    sig_state = company.get("signal_state") or SignalState.WATCHING
     pos_state = (company.get("position_state") or "").strip()
     sig_age   = format_signal_age(company.get("signal_state_since"))
 
@@ -159,35 +162,35 @@ def _render_director_signal_card(doc_id: str, signal: dict, company: dict, db) -
     col_act, col_defer, col_decline, col_close, col_dismiss, _ = st.columns([1, 1, 1, 1, 1, 3])
 
     with col_act:
-        if pos_state in ("", None, "closed", "deferred"):
+        if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED):
             if st.button("Act", key=f"dir_act_{doc_id}",
                          help="Record that you have taken a position."):
-                set_position_state(db, ticker, "acted")
+                set_position_state(db, ticker, PositionState.ACTED)
                 st.rerun()
 
     with col_defer:
-        if pos_state in ("", None, "closed"):
+        if pos_state in ("", None, PositionState.CLOSED):
             if st.button("Defer", key=f"dir_defer_{doc_id}",
                          help="Interested but not acting now."):
-                set_position_state(db, ticker, "deferred")
+                set_position_state(db, ticker, PositionState.DEFERRED)
                 st.rerun()
 
     with col_decline:
-        if pos_state in ("", None, "closed", "deferred"):
+        if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED):
             if st.button("Decline", key=f"dir_decline_{doc_id}",
                          help="Pass. Signal resets; company stays monitored."):
-                set_position_state(db, ticker, "declined")
+                set_position_state(db, ticker, PositionState.DECLINED)
                 st.rerun()
 
     with col_close:
-        if pos_state == "acted":
+        if pos_state == PositionState.ACTED:
             if st.button("Close", key=f"dir_close_{doc_id}",
                          help="Exit position. Signal state resets to Watching."):
-                set_position_state(db, ticker, "closed")
+                set_position_state(db, ticker, PositionState.CLOSED)
                 st.rerun()
 
     with col_dismiss:
-        if pos_state in ("", None, "closed", "deferred", "declined"):
+        if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED, PositionState.DECLINED):
             if st.button("Dismiss", key=f"dir_dismiss_{doc_id}",
                          help="Permanently delete this director signal."):
                 delete_director_signal(db, doc_id)
@@ -319,18 +322,18 @@ def _render_director_signal_card(doc_id: str, signal: dict, company: dict, db) -
 
 def _tr1_card_class(recommendation: str) -> str:
     r = (recommendation or "").lower()
-    if r == "investigate":
+    if r == LegacyRec.INVESTIGATE:
         return "tr1-investigate"
-    if r == "monitor":
+    if r == LegacyRec.MONITOR:
         return "tr1-monitor"
     return "tr1-ignore"
 
 
 def _tr1_rec_badge(recommendation: str) -> str:
     r = (recommendation or "").lower()
-    if r == "investigate":
+    if r == LegacyRec.INVESTIGATE:
         return '<span class="badge badge-tr1-investigate">Investigate</span>'
-    if r == "monitor":
+    if r == LegacyRec.MONITOR:
         return '<span class="badge badge-tr1-monitor">Monitor</span>'
     return '<span class="badge badge-tr1-ignore">Ignore</span>'
 
@@ -397,7 +400,7 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
     notifier_type  = inv_research.get("notifier_type") if agentic_status == "complete" else None
     conviction     = inv_research.get("conviction_assessment") if agentic_status == "complete" else None
 
-    sig_state = company.get("signal_state") or "watching"
+    sig_state = company.get("signal_state") or SignalState.WATCHING
     pos_state = (company.get("position_state") or "").strip()
     sig_age   = format_signal_age(company.get("signal_state_since"))
 
@@ -458,35 +461,35 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
     col_act, col_defer, col_decline, col_close, col_dismiss, _ = st.columns([1, 1, 1, 1, 1, 3])
 
     with col_act:
-        if pos_state in ("", None, "closed", "deferred"):
+        if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED):
             if st.button("Act", key=f"tr1_act_{doc_id}",
                          help="Record that you have taken a position."):
-                set_position_state(db, ticker, "acted")
+                set_position_state(db, ticker, PositionState.ACTED)
                 st.rerun()
 
     with col_defer:
-        if pos_state in ("", None, "closed"):
+        if pos_state in ("", None, PositionState.CLOSED):
             if st.button("Defer", key=f"tr1_defer_{doc_id}",
                          help="Interested but not acting now."):
-                set_position_state(db, ticker, "deferred")
+                set_position_state(db, ticker, PositionState.DEFERRED)
                 st.rerun()
 
     with col_decline:
-        if pos_state in ("", None, "closed", "deferred"):
+        if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED):
             if st.button("Decline", key=f"tr1_decline_{doc_id}",
                          help="Pass. Signal resets; company stays monitored."):
-                set_position_state(db, ticker, "declined")
+                set_position_state(db, ticker, PositionState.DECLINED)
                 st.rerun()
 
     with col_close:
-        if pos_state == "acted":
+        if pos_state == PositionState.ACTED:
             if st.button("Close", key=f"tr1_close_{doc_id}",
                          help="Exit position. Signal state resets to Watching."):
-                set_position_state(db, ticker, "closed")
+                set_position_state(db, ticker, PositionState.CLOSED)
                 st.rerun()
 
     with col_dismiss:
-        if pos_state in ("", None, "closed", "deferred", "declined"):
+        if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED, PositionState.DECLINED):
             if st.button("Dismiss", key=f"tr1_dismiss_{doc_id}",
                          help="Permanently delete this TR-1 signal."):
                 delete_director_signal(db, doc_id)
@@ -599,17 +602,17 @@ def _render_tr1_signals_section(
 
         if pos_filter == "Unreviewed" and pos:
             continue
-        if pos_filter == "Acted"    and pos != "acted":
+        if pos_filter == "Acted"    and pos != PositionState.ACTED:
             continue
-        if pos_filter == "Deferred" and pos != "deferred":
+        if pos_filter == "Deferred" and pos != PositionState.DEFERRED:
             continue
-        if pos_filter == "Declined" and pos != "declined":
+        if pos_filter == "Declined" and pos != PositionState.DECLINED:
             continue
-        if pos_filter == "Closed"   and pos != "closed":
+        if pos_filter == "Closed"   and pos != PositionState.CLOSED:
             continue
-        if pos == "declined" and pos_filter != "Declined":
+        if pos == PositionState.DECLINED and pos_filter != "Declined":
             continue
-        if pos == "closed" and pos_filter != "Closed":
+        if pos == PositionState.CLOSED and pos_filter != "Closed":
             continue
         if since_cutoff:
             try:
@@ -634,10 +637,10 @@ def _render_tr1_signals_section(
     for item in visible:
         _, signal, _ = item
         simple = signal.get("simple_lens_result") or {}
-        rec = (simple.get("recommendation") or "Ignore").lower()
-        if rec == "investigate":
+        rec = (simple.get("recommendation") or LegacyRec.IGNORE).lower()
+        if rec == LegacyRec.INVESTIGATE:
             grp_investigate.append(item)
-        elif rec == "monitor":
+        elif rec == LegacyRec.MONITOR:
             grp_monitor.append(item)
         else:
             grp_ignore.append(item)
@@ -686,17 +689,17 @@ def _render_director_signals_section(
 
         if pos_filter == "Unreviewed" and pos:
             continue
-        if pos_filter == "Acted"    and pos != "acted":
+        if pos_filter == "Acted"    and pos != PositionState.ACTED:
             continue
-        if pos_filter == "Deferred" and pos != "deferred":
+        if pos_filter == "Deferred" and pos != PositionState.DEFERRED:
             continue
-        if pos_filter == "Declined" and pos != "declined":
+        if pos_filter == "Declined" and pos != PositionState.DECLINED:
             continue
-        if pos_filter == "Closed"   and pos != "closed":
+        if pos_filter == "Closed"   and pos != PositionState.CLOSED:
             continue
-        if pos == "declined" and pos_filter != "Declined":
+        if pos == PositionState.DECLINED and pos_filter != "Declined":
             continue
-        if pos == "closed" and pos_filter != "Closed":
+        if pos == PositionState.CLOSED and pos_filter != "Closed":
             continue
         if since_cutoff:
             try:
@@ -722,9 +725,9 @@ def _render_director_signals_section(
         _, signal, _ = item
         rec    = (signal.get("agentic_recommendation") or "").lower()
         status = signal.get("agentic_status") or "pending"
-        if "investigate" in rec:
+        if LegacyRec.INVESTIGATE in rec:
             grp_investigate.append(item)
-        elif "monitor" in rec:
+        elif LegacyRec.MONITOR in rec:
             grp_monitor.append(item)
         else:
             grp_other.append(item)
@@ -808,18 +811,18 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
         pos = (company.get("position_state") or "").strip()
         if pos_filter == "Unreviewed" and pos:
             return False
-        if pos_filter == "Acted"    and pos != "acted":
+        if pos_filter == "Acted"    and pos != PositionState.ACTED:
             return False
-        if pos_filter == "Deferred" and pos != "deferred":
+        if pos_filter == "Deferred" and pos != PositionState.DEFERRED:
             return False
-        if pos_filter == "Declined" and pos != "declined":
+        if pos_filter == "Declined" and pos != PositionState.DECLINED:
             return False
-        if pos_filter == "Closed"   and pos != "closed":
+        if pos_filter == "Closed"   and pos != PositionState.CLOSED:
             return False
         # Declined and Closed are hidden from all views except their explicit filter
-        if pos == "declined" and pos_filter != "Declined":
+        if pos == PositionState.DECLINED and pos_filter != "Declined":
             return False
-        if pos == "closed" and pos_filter != "Closed":
+        if pos == PositionState.CLOSED and pos_filter != "Closed":
             return False
         if since_cutoff:
             # unified schema: prefer lens_data.analysed_at, fall back to stored_at
@@ -840,18 +843,18 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
         company = company_map.get((result.get("ticker") or "").upper(), {})
         if not _passes_filters(result, company):
             continue
-        # unified schema: recommendation is "act" | "monitor" | "ignore"
-        action_val = (result.get("recommendation") or "ignore").lower()
-        if action_val not in ("act", "monitor") and hide_no_action:
+        # unified schema: recommendation is Rec.ACT | Rec.MONITOR | Rec.IGNORE
+        action_val = (result.get("recommendation") or Rec.IGNORE).lower()
+        if action_val not in (Rec.ACT, Rec.MONITOR) and hide_no_action:
             continue
         pos = (company.get("position_state") or "").strip()
-        sig = company.get("signal_state") or "watching"
+        sig = company.get("signal_state") or SignalState.WATCHING
         item = (doc_id, result, company)
-        if pos == "acted" and sig in ("signal_negative", "signal_mixed"):
+        if pos == PositionState.ACTED and sig in (SignalState.SIGNAL_NEGATIVE, SignalState.SIGNAL_MIXED):
             grp_urgent.append(item)
-        elif action_val == "act":
+        elif action_val == Rec.ACT:
             grp_action.append(item)
-        elif action_val == "monitor":
+        elif action_val == Rec.MONITOR:
             grp_monitor.append(item)
         else:
             grp_no_action.append(item)
@@ -881,12 +884,12 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
             source       = lens_data.get("source") or "—"
             analysed_at  = lens_data.get("analysed_at") or result.get("stored_at", "")
             summary      = result.get("summary", "")
-            recommendation = result.get("recommendation", "ignore")
+            recommendation = result.get("recommendation", Rec.IGNORE)
 
-            sig_state = company.get("signal_state") or "watching"
+            sig_state = company.get("signal_state") or SignalState.WATCHING
             pos_state = (company.get("position_state") or "").strip()
             sig_age   = format_signal_age(company.get("signal_state_since"))
-            is_urgent = pos_state == "acted" and sig_state in ("signal_negative", "signal_mixed")
+            is_urgent = pos_state == PositionState.ACTED and sig_state in (SignalState.SIGNAL_NEGATIVE, SignalState.SIGNAL_MIXED)
 
             badge_html, card_class = recommended_action_badge_unified(recommendation)
             classes     = f"signal-card-compact {card_class}" + (" urgent" if is_urgent else "")
@@ -964,37 +967,37 @@ def render_signals_tab(db, signals, company_map, director_signals=None) -> None:
             # Declined      : Dismiss
 
             with col_act:
-                if pos_state in ("", None, "closed", "deferred"):
+                if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED):
                     help_txt = ("Proceed — record that you have taken a position."
-                                if pos_state == "deferred"
+                                if pos_state == PositionState.DEFERRED
                                 else "Record that you have taken a position. Counter-signals will be surfaced as urgent.")
                     if st.button("Act", key=f"act_{doc_id}", help=help_txt):
-                        set_position_state(db, ticker, "acted")
+                        set_position_state(db, ticker, PositionState.ACTED)
                         st.rerun()
 
             with col_defer:
-                if pos_state in ("", None, "closed"):
+                if pos_state in ("", None, PositionState.CLOSED):
                     if st.button("Defer", key=f"defer_{doc_id}",
                                  help="Interested but not acting now. Useful for pipeline companies or illiquid situations."):
-                        set_position_state(db, ticker, "deferred")
+                        set_position_state(db, ticker, PositionState.DEFERRED)
                         st.rerun()
 
             with col_decline:
-                if pos_state in ("", None, "closed", "deferred"):
+                if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED):
                     if st.button("Decline", key=f"decline_{doc_id}",
                                  help="Pass on this opportunity. Signal state resets — the company remains monitored for future signals."):
-                        set_position_state(db, ticker, "declined")
+                        set_position_state(db, ticker, PositionState.DECLINED)
                         st.rerun()
 
             with col_close:
-                if pos_state == "acted":
+                if pos_state == PositionState.ACTED:
                     if st.button("Close", key=f"close_{doc_id}",
                                  help="Record that you have exited this position. Signal state resets to Watching so the company can be re-evaluated on future signals."):
-                        set_position_state(db, ticker, "closed")
+                        set_position_state(db, ticker, PositionState.CLOSED)
                         st.rerun()
 
             with col_dismiss:
-                if pos_state in ("", None, "closed", "deferred", "declined"):
+                if pos_state in ("", None, PositionState.CLOSED, PositionState.DEFERRED, PositionState.DECLINED):
                     if st.button("Dismiss", key=f"dismiss_{doc_id}",
                                  help="Permanently delete this signal result. Use for noise — the company remains monitored."):
                         delete_signal_result(db, doc_id)

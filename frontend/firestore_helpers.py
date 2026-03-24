@@ -10,6 +10,8 @@ from constants import (
     _LSEG_FILTERS_DOC,
     _DEFAULT_EXCLUDED_TYPES,
     _DEFAULT_COMPANY_KEYWORDS,
+    SignalState,
+    PositionState,
 )
 
 
@@ -365,8 +367,8 @@ def set_position_state(db, ticker: str, state: str) -> None:
         "position_state": state,
         "position_state_since": now_iso,
     }
-    if state in ("closed", "declined"):
-        update["signal_state"] = "watching"
+    if state in (PositionState.CLOSED, PositionState.DECLINED):
+        update["signal_state"] = SignalState.WATCHING
         update["signal_state_since"] = now_iso
     db.collection("universe_companies").document(ticker.upper()).set(
         update, merge=True,

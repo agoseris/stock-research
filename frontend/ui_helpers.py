@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 
+from constants import SignalState, PositionState, Rec, LegacyRec
+
 
 def parse_analysis(text):
     """Parse LLM analysis text into a list of (key, value) tuples."""
@@ -27,23 +29,10 @@ def get_field(text, field):
 
 
 _ACTION_TOOLTIPS = {
-    "yes":     "The LLM has assessed this announcement as a potential investment catalyst worth investigating.",
-    "monitor": "Weak signal — worth tracking but not yet at the threshold for action.",
-    "no":      "The LLM found no meaningful catalyst signal in this announcement.",
+    Rec.ACT:     "The LLM has assessed this announcement as a potential investment catalyst worth investigating.",
+    Rec.MONITOR: "Weak signal — worth tracking but not yet at the threshold for action.",
+    Rec.IGNORE:  "The LLM found no meaningful catalyst signal in this announcement.",
 }
-
-
-def recommended_action_badge(analysis_text):
-    val = get_field(analysis_text, "RECOMMENDED_ACTION").lower()
-    if val == "yes":
-        tip = _ACTION_TOOLTIPS["yes"]
-        return f'<span class="badge badge-yes" title="{tip}">⬆ Action</span>', "action-yes"
-    elif val == "monitor":
-        tip = _ACTION_TOOLTIPS["monitor"]
-        return f'<span class="badge badge-monitor" title="{tip}">◉ Monitor</span>', "action-monitor"
-    else:
-        tip = _ACTION_TOOLTIPS["no"]
-        return f'<span class="badge badge-no" title="{tip}">— No action</span>', "action-no"
 
 
 def recommended_action_badge_unified(recommendation: str):
@@ -53,26 +42,30 @@ def recommended_action_badge_unified(recommendation: str):
     Parameters
     ----------
     recommendation : str
-        One of: 'act', 'monitor', 'ignore' (unified schema values).
+        One of: 'act', 'monitor', 'ignore' (Rec constants).
+        Also accepts legacy values 'yes' / 'investigate' (normalised to 'act').
 
     Returns
     -------
-    (badge_html, card_css_class) matching the return type of recommended_action_badge().
+    (badge_html, card_css_class) tuple.
     """
     r = (recommendation or "").lower()
-    if r == "act":
-        tip = _ACTION_TOOLTIPS["yes"]
+    # Normalise legacy vocabulary so callers need not pre-convert.
+    if r == LegacyRec.YES or LegacyRec.INVESTIGATE in r:
+        r = Rec.ACT
+    if r == Rec.ACT:
+        tip = _ACTION_TOOLTIPS[Rec.ACT]
         return f'<span class="badge badge-yes" title="{tip}">⬆ Action</span>', "action-yes"
-    if r == "monitor":
-        tip = _ACTION_TOOLTIPS["monitor"]
+    if r == Rec.MONITOR:
+        tip = _ACTION_TOOLTIPS[Rec.MONITOR]
         return f'<span class="badge badge-monitor" title="{tip}">◉ Monitor</span>', "action-monitor"
-    tip = _ACTION_TOOLTIPS["no"]
+    tip = _ACTION_TOOLTIPS[Rec.IGNORE]
     return f'<span class="badge badge-no" title="{tip}">— No action</span>', "action-no"
 
 
 def recommend_add_badge(assessment_text):
     val = get_field(assessment_text, "RECOMMEND_ADD").lower()
-    if val == "yes":
+    if val == LegacyRec.YES:
         return '<span class="badge badge-yes">⬆ Add to universe</span>', "discovery"
     elif val == "maybe":
         return '<span class="badge badge-maybe">? Consider</span>', "discovery"
@@ -89,35 +82,35 @@ def format_timestamp(ts_str):
 
 
 _SIGNAL_STATE_STYLE = {
-    "watching":           ("WATCHING",   "badge-state-watching"),
-    "monitor":            ("MONITOR",    "badge-state-monitor"),
-    "signal_active":      ("SIGNAL",     "badge-state-active"),
-    "signal_reinforced":  ("CONFIRMED",  "badge-state-reinforced"),
-    "signal_mixed":       ("MIXED",      "badge-state-mixed"),
-    "signal_negative":    ("NEGATIVE",   "badge-state-negative"),
+    SignalState.WATCHING:          ("WATCHING",   "badge-state-watching"),
+    SignalState.MONITOR:           ("MONITOR",    "badge-state-monitor"),
+    SignalState.SIGNAL_ACTIVE:     ("SIGNAL",     "badge-state-active"),
+    SignalState.SIGNAL_REINFORCED: ("CONFIRMED",  "badge-state-reinforced"),
+    SignalState.SIGNAL_MIXED:      ("MIXED",      "badge-state-mixed"),
+    SignalState.SIGNAL_NEGATIVE:   ("NEGATIVE",   "badge-state-negative"),
 }
 
 _STATE_TOOLTIPS = {
-    "watching":          "No signals detected yet. Company is monitored.",
-    "monitor":           "Weak or moderate signals detected. Below the threshold for action.",
-    "signal_active":     "Strong signal active. Review and decide.",
-    "signal_reinforced": "A second strong signal has reinforced the first.",
-    "signal_mixed":      "A counter-signal arrived while a positive signal was active. Review carefully.",
-    "signal_negative":   "Strong counter-signal. Positive signals are suppressed until this decays.",
+    SignalState.WATCHING:          "No signals detected yet. Company is monitored.",
+    SignalState.MONITOR:           "Weak or moderate signals detected. Below the threshold for action.",
+    SignalState.SIGNAL_ACTIVE:     "Strong signal active. Review and decide.",
+    SignalState.SIGNAL_REINFORCED: "A second strong signal has reinforced the first.",
+    SignalState.SIGNAL_MIXED:      "A counter-signal arrived while a positive signal was active. Review carefully.",
+    SignalState.SIGNAL_NEGATIVE:   "Strong counter-signal. Positive signals are suppressed until this decays.",
 }
 
 _POSITION_STATE_STYLE = {
-    "acted":    ("ACTED",    "badge-pos-acted"),
-    "deferred": ("DEFERRED", "badge-pos-deferred"),
-    "declined": ("DECLINED", "badge-pos-declined"),
-    "closed":   ("CLOSED",   "badge-pos-closed"),
+    PositionState.ACTED:    ("ACTED",    "badge-pos-acted"),
+    PositionState.DEFERRED: ("DEFERRED", "badge-pos-deferred"),
+    PositionState.DECLINED: ("DECLINED", "badge-pos-declined"),
+    PositionState.CLOSED:   ("CLOSED",   "badge-pos-closed"),
 }
 
 
 def signal_state_badge(state, age=""):
     """Return HTML badge for a signal_state value, with optional time-in-state suffix."""
-    label, cls = _SIGNAL_STATE_STYLE.get(state or "watching", ("WATCHING", "badge-state-watching"))
-    tooltip = _STATE_TOOLTIPS.get(state or "watching", "")
+    label, cls = _SIGNAL_STATE_STYLE.get(state or SignalState.WATCHING, ("WATCHING", "badge-state-watching"))
+    tooltip = _STATE_TOOLTIPS.get(state or SignalState.WATCHING, "")
     age_str = f" — {age}" if age else ""
     return f'<span class="badge {cls}" title="{tooltip}">{label}{age_str}</span>'
 

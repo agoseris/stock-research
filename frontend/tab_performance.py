@@ -22,6 +22,7 @@ import pandas as pd
 import streamlit as st
 
 from firestore_helpers import get_signal_performance
+from constants import LegacyRec, Rec
 
 # ---------------------------------------------------------------------------
 # Snapshot keys in display order
@@ -66,11 +67,15 @@ _LENS_ORDER = [
 
 # Normalise raw stored recommendation values to canonical display labels.
 # The signal_performance collection is populated from two different sources
-# with different recommendation vocabularies; this map collapses them.
+# with different recommendation vocabularies; this map collapses them into
+# a single display label. LegacyRec values (director/TR-1) are normalised
+# to the same labels as Rec values (unified schema).
 _REC_DISPLAY = {
-    "investigate": "Act",
-    "yes":         "Act",
-    "monitor":     "Monitor",
+    LegacyRec.INVESTIGATE: "Act",
+    LegacyRec.YES:         "Act",
+    LegacyRec.MONITOR:     "Monitor",
+    Rec.ACT:               "Act",
+    Rec.MONITOR:           "Monitor",
 }
 
 
