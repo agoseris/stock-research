@@ -37,7 +37,6 @@ load_dotenv(os.path.join(_PROJECT_ROOT, ".env"))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-import anthropic
 from utilities.orchestrator.classification import (
     classify_article,
     get_open_market_transactions,
@@ -92,8 +91,6 @@ class JobRunner:
         self.lenses = [RegulatoryCatalystLens()]
         self.llm = GeminiProvider()
         self.notifier = TelegramNotifier()
-        self.anthropic_client = anthropic.Anthropic()
-
         self._universe_tickers = self._load_universe_tickers()
         print(f"[{_ts()}] Job runner ready. Polling pending_jobs every {POLL_INTERVAL}s.")
 
@@ -333,7 +330,6 @@ REASON: [one sentence]"""
                     rns_article_id=rns_article_id,
                     transaction=tx_enriched,
                     company_profile=company_profile,
-                    client=self.anthropic_client,
                     db=self.db,
                 )
                 rec = simple_result.get("RECOMMENDED_ACTION", "unknown")
@@ -854,7 +850,6 @@ REASON: [one sentence]"""
                             "body": announcement.body,
                             "published_at": str(announcement.published_at),
                         },
-                        client=self.anthropic_client,
                         db=self.db,
                     )
                     article_type = classification.get("article_type", "unclassified")

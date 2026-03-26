@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from utilities.orchestrator.config import ORCHESTRATOR_CONFIG
+from utilities.orchestrator.gemini_call import call_gemini
 from utilities.orchestrator.persistence import (
     update_announcement_classification,
     persist_pdmr_transaction,
@@ -378,7 +379,6 @@ def _failed_result(raw_response: str = "") -> dict:
 
 def call_classification(
     announcement: dict,
-    client,
     config: Optional[dict] = None,
 ) -> tuple[dict, dict]:
     """
@@ -388,8 +388,6 @@ def call_classification(
     ----------
     announcement : dict
         Must contain company_name, ticker, source_name, headline, body.
-    client : anthropic.Anthropic
-        Anthropic API client instance.
     config : dict, optional
         Orchestrator config dict. Uses ORCHESTRATOR_CONFIG defaults if None.
 
@@ -405,22 +403,11 @@ def call_classification(
     prompt = build_classification_prompt(announcement)
 
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=8192,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        text, token_usage = call_gemini(prompt, model)
     except Exception as e:
         logger.error("Classification API call failed: %s", e)
         return _failed_result(), {"input": 0, "output": 0, "model": model}
 
-    token_usage = {
-        "input": response.usage.input_tokens,
-        "output": response.usage.output_tokens,
-        "model": model,
-    }
-
-    text = response.content[0].text if response.content else ""
     result = parse_classification_response(text)
 
     return result, token_usage
@@ -541,7 +528,6 @@ def route_classification(
 def classify_article(
     rns_article_id: str,
     announcement: dict,
-    client,
     db=None,
     config: Optional[dict] = None,
 ) -> tuple[dict, dict]:
@@ -555,8 +541,6 @@ def classify_article(
     announcement : dict
         Must contain: company_name, ticker, source_name, headline, body,
         published_at.
-    client : anthropic.Anthropic
-        Anthropic API client instance.
     db : Firestore client, optional
     config : dict, optional
 
@@ -577,7 +561,7 @@ def classify_article(
     - For regulatory_catalyst: call existing lens_catalyst.
     - For substantive_news / administrative: nothing further required.
     """
-    classification, token_usage = call_classification(announcement, client, config)
+    classification, token_usage = call_classification(announcement, config)
 
     article_type = route_classification(
         rns_article_id=rns_article_id,

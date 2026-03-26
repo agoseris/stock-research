@@ -6,21 +6,7 @@ No live network calls are made.
 """
 
 import pytest
-from unittest.mock import MagicMock
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_client(response_text: str, input_tokens: int = 80, output_tokens: int = 400):
-    client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=response_text)]
-    mock_response.usage.input_tokens = input_tokens
-    mock_response.usage.output_tokens = output_tokens
-    client.messages.create.return_value = mock_response
-    return client
+from unittest.mock import MagicMock, patch
 
 
 def _sample_transaction(**overrides) -> dict:
@@ -236,34 +222,36 @@ class TestParseSimpleLensResponse:
 
 class TestCallSimpleLens:
 
+    def _mock_call_gemini(self, response_text, input_tokens=80, output_tokens=400):
+        token_usage = {"input": input_tokens, "output": output_tokens, "model": "gemini-2.0-flash"}
+        return patch(
+            "utilities.orchestrator.simple_lens.call_gemini",
+            return_value=(response_text, token_usage),
+        )
+
     def test_uses_simple_lens_model_from_config(self):
         from utilities.orchestrator.simple_lens import call_simple_lens
-        client = _make_client(_sample_response())
-        config = {"simple_lens_model": "claude-test-haiku"}
-
-        call_simple_lens(_sample_transaction(), _sample_profile(), client, config=config)
-
-        call_args = client.messages.create.call_args
-        model_used = call_args.kwargs.get("model")
-        assert model_used == "claude-test-haiku"
+        config = {"simple_lens_model": "gemini-test-flash"}
+        with patch("utilities.orchestrator.simple_lens.call_gemini") as mock_cg:
+            mock_cg.return_value = (_sample_response(), {"input": 0, "output": 0, "model": "gemini-test-flash"})
+            call_simple_lens(_sample_transaction(), _sample_profile(), config=config)
+            assert mock_cg.call_args[0][1] == "gemini-test-flash"
 
     def test_returns_token_usage(self):
         from utilities.orchestrator.simple_lens import call_simple_lens
-        client = _make_client(_sample_response(), input_tokens=120, output_tokens=380)
-
-        _, token_usage = call_simple_lens(_sample_transaction(), _sample_profile(), client)
-
+        with self._mock_call_gemini(_sample_response(), input_tokens=120, output_tokens=380):
+            _, token_usage = call_simple_lens(_sample_transaction(), _sample_profile())
         assert token_usage["input"] == 120
         assert token_usage["output"] == 380
         assert "model" in token_usage
 
     def test_api_error_returns_empty_result_with_zero_tokens(self):
         from utilities.orchestrator.simple_lens import call_simple_lens
-        client = MagicMock()
-        client.messages.create.side_effect = Exception("API unavailable")
-
-        result, token_usage = call_simple_lens(_sample_transaction(), _sample_profile(), client)
-
+        with patch(
+            "utilities.orchestrator.simple_lens.call_gemini",
+            side_effect=Exception("API unavailable"),
+        ):
+            result, token_usage = call_simple_lens(_sample_transaction(), _sample_profile())
         assert result["SIGNAL_STRENGTH"] is None
         assert result["RECOMMENDED_ACTION"] == ""
         assert token_usage["input"] == 0
@@ -271,10 +259,8 @@ class TestCallSimpleLens:
 
     def test_result_contains_all_expected_keys(self):
         from utilities.orchestrator.simple_lens import call_simple_lens
-        client = _make_client(_sample_response())
-
-        result, _ = call_simple_lens(_sample_transaction(), _sample_profile(), client)
-
+        with self._mock_call_gemini(_sample_response()):
+            result, _ = call_simple_lens(_sample_transaction(), _sample_profile())
         for key in [
             "TRANSACTION_NATURE", "POSITION_CHANGE_PCT", "COMMITMENT_SIZE",
             "HOLDING_SIGNIFICANCE", "SIGNAL_STRENGTH", "SIGNAL_DIRECTION",

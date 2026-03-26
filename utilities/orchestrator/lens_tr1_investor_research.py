@@ -24,7 +24,6 @@ import json
 import logging
 import os
 import re
-import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -41,6 +40,7 @@ if not _creds_path or not os.path.exists(_creds_path):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _frontend_creds
 
 from utilities.orchestrator.config import ORCHESTRATOR_CONFIG
+from utilities.orchestrator.gemini_call import call_gemini
 from utilities.orchestrator.persistence import persist_tr1_investor_research
 
 logger = logging.getLogger(__name__)
@@ -211,59 +211,28 @@ def call_investor_research(
     Returns (result, token_usage). On API failure, returns a safe empty
     result with _error set.
     """
-    api_key = os.environ.get("GEMINI_KEY", "")
-    if not api_key:
-        return _empty_result(error="GEMINI_KEY not set"), {
-            "input": 0, "output": 0, "model": _MODEL
-        }
-
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError:
-        return _empty_result(error="google-genai package not installed"), {
-            "input": 0, "output": 0, "model": _MODEL
-        }
+    from google.genai import types
 
     prompt = build_investor_research_prompt(
         notifier_name, threshold_crossed, issuer_name, ticker
     )
 
-    client = genai.Client(api_key=api_key)
-    max_retries = 3
-    retry_delay = 10
-    response = None
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())],
-                    temperature=0.3,
-                    max_output_tokens=1500,
-                ),
-            )
-            break
-        except Exception as e:
-            err_str = str(e)
-            if attempt < max_retries - 1 and ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str):
-                logger.warning(
-                    "Investor research rate limited (attempt %d/%d), retrying in %ds: %s",
-                    attempt + 1, max_retries, retry_delay, e,
-                )
-                time.sleep(retry_delay)
-                retry_delay *= 2
-            else:
-                logger.error("Investor research API call failed: %s", e)
-                return _empty_result(error=err_str), {"input": 0, "output": 0, "model": _MODEL}
-    if response is None:
-        return _empty_result(error="Max retries exceeded"), {"input": 0, "output": 0, "model": _MODEL}
+    gemini_config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        temperature=0.3,
+        max_output_tokens=1500,
+    )
 
-    citations = _extract_grounding_citations(response)
-    token_usage = _extract_token_usage(response)
-    text = response.text or ""
+    try:
+        text, token_usage = call_gemini(prompt, _MODEL, config=gemini_config)
+    except Exception as e:
+        logger.error("Investor research API call failed: %s", e)
+        return _empty_result(error=str(e)), {"input": 0, "output": 0, "model": _MODEL}
 
+    # Grounding citation metadata is not available via call_gemini (returns text
+    # only). Citations are best-effort; pass empty list — the LLM may include
+    # URLs in the JSON text itself, which parse_investor_research_response retains.
+    citations: list[str] = []
     result = parse_investor_research_response(text, citations)
 
     logger.info(
@@ -276,37 +245,6 @@ def call_investor_research(
     )
 
     return result, token_usage
-
-
-def _extract_grounding_citations(response) -> list[str]:
-    """Extract web citation URLs from Gemini grounding metadata."""
-    citations = []
-    try:
-        for candidate in response.candidates or []:
-            gm = getattr(candidate, "grounding_metadata", None)
-            if not gm:
-                continue
-            for chunk in getattr(gm, "grounding_chunks", []) or []:
-                web = getattr(chunk, "web", None)
-                if web:
-                    uri = getattr(web, "uri", None)
-                    if uri:
-                        citations.append(uri)
-    except Exception as e:
-        logger.debug("Could not extract grounding citations: %s", e)
-    return citations
-
-
-def _extract_token_usage(response) -> dict:
-    try:
-        usage = response.usage_metadata
-        return {
-            "input": getattr(usage, "prompt_token_count", 0) or 0,
-            "output": getattr(usage, "candidates_token_count", 0) or 0,
-            "model": _MODEL,
-        }
-    except Exception:
-        return {"input": 0, "output": 0, "model": _MODEL}
 
 
 # ---------------------------------------------------------------------------

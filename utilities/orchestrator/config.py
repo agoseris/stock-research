@@ -7,13 +7,13 @@ Model IDs should be updated when newer versions become available.
 
 ORCHESTRATOR_CONFIG = {
     # --- Models ---
-    # Classification accuracy is critical — always use Sonnet
-    "classification_model": "claude-sonnet-4-6",
+    # Classification — Gemini Flash (free tier); was Claude Sonnet
+    "classification_model": "gemini-2.0-flash",
     # TR-1 simple lens and investor research — Gemini Flash (free tier)
     "tr1_simple_lens_model": "gemini-2.0-flash",
     "tr1_investor_research_model": "gemini-2.0-flash",
-    # Simple lens is one-shot from pre-extracted data — Haiku is sufficient
-    "simple_lens_model": "claude-haiku-4-5-20251001",
+    # Simple lens — Gemini Flash (free tier); was Claude Haiku
+    "simple_lens_model": "gemini-2.0-flash",
     # Layer 1: platform assessment — moderate reasoning, Haiku appropriate
     "layer1_model": "claude-haiku-4-5-20251001",
     # Layer 2: director analysis — Haiku unless credibility research triggered

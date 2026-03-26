@@ -10,21 +10,6 @@ import pytest
 from unittest.mock import MagicMock, patch, call
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_client(response_text: str, input_tokens: int = 100, output_tokens: int = 200):
-    """Return a mock Anthropic client that returns response_text."""
-    client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=response_text)]
-    mock_response.usage.input_tokens = input_tokens
-    mock_response.usage.output_tokens = output_tokens
-    client.messages.create.return_value = mock_response
-    return client
-
-
 def _make_announcement(**overrides):
     base = {
         "company_name": "Foresight Group Holdings",
@@ -237,49 +222,51 @@ class TestParseClassificationResponse:
 
 class TestCallClassification:
 
+    def _mock_call_gemini(self, response_text, input_tokens=100, output_tokens=200):
+        """Return a patch target and return value for call_gemini."""
+        token_usage = {"input": input_tokens, "output": output_tokens, "model": "gemini-2.0-flash"}
+        return patch(
+            "utilities.orchestrator.classification.call_gemini",
+            return_value=(response_text, token_usage),
+        )
+
     def test_uses_classification_model_from_config(self):
         from utilities.orchestrator.classification import call_classification
-        client = _make_client(_pdmr_json())
-        config = {"classification_model": "claude-test-model"}
-
-        call_classification(_make_announcement(), client, config=config)
-
-        call_args = client.messages.create.call_args
-        model_used = call_args.kwargs.get("model") or call_args.args[0] if call_args.args else call_args.kwargs.get("model")
-        assert model_used == "claude-test-model"
+        config = {"classification_model": "gemini-test-model"}
+        with patch("utilities.orchestrator.classification.call_gemini") as mock_cg:
+            mock_cg.return_value = (_pdmr_json(), {"input": 0, "output": 0, "model": "gemini-test-model"})
+            call_classification(_make_announcement(), config=config)
+            _, call_kwargs = mock_cg.call_args
+            assert mock_cg.call_args[0][1] == "gemini-test-model"
 
     def test_returns_token_usage(self):
         from utilities.orchestrator.classification import call_classification
-        client = _make_client(_pdmr_json(), input_tokens=150, output_tokens=300)
-
-        _, token_usage = call_classification(_make_announcement(), client)
-
+        with self._mock_call_gemini(_pdmr_json(), input_tokens=150, output_tokens=300):
+            _, token_usage = call_classification(_make_announcement())
         assert token_usage["input"] == 150
         assert token_usage["output"] == 300
 
     def test_token_usage_includes_model(self):
         from utilities.orchestrator.classification import call_classification
-        client = _make_client(_pdmr_json())
-        _, token_usage = call_classification(_make_announcement(), client)
+        with self._mock_call_gemini(_pdmr_json()):
+            _, token_usage = call_classification(_make_announcement())
         assert "model" in token_usage
 
     def test_api_error_returns_failed_result_with_zero_tokens(self):
         from utilities.orchestrator.classification import call_classification
-        client = MagicMock()
-        client.messages.create.side_effect = Exception("API unavailable")
-
-        result, token_usage = call_classification(_make_announcement(), client)
-
+        with patch(
+            "utilities.orchestrator.classification.call_gemini",
+            side_effect=Exception("API unavailable"),
+        ):
+            result, token_usage = call_classification(_make_announcement())
         assert result["extraction_status"] == "failed"
         assert token_usage["input"] == 0
         assert token_usage["output"] == 0
 
     def test_json_parse_error_returns_failed_result(self):
         from utilities.orchestrator.classification import call_classification
-        client = _make_client("this is not valid json")
-
-        result, _ = call_classification(_make_announcement(), client)
-
+        with self._mock_call_gemini("this is not valid json"):
+            result, _ = call_classification(_make_announcement())
         assert result["extraction_status"] == "failed"
 
 

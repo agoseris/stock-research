@@ -1,7 +1,7 @@
 """
 Stage 2: lens_director_simple — one-shot baseline director signal assessment.
 
-A single Claude Haiku call producing a structured assessment of an open-market
+A single Gemini Flash call producing a structured assessment of an open-market
 director transaction. Analogous in structure to lens_catalyst. Runs before the
 agentic investigation and provides the baseline against which it is measured.
 
@@ -16,7 +16,6 @@ Usage:
         rns_article_id="abc123",
         transaction=transaction_dict,
         company_profile=profile_dict,
-        client=anthropic_client,
         db=db,
         config=config,
     )
@@ -28,6 +27,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from utilities.orchestrator.config import ORCHESTRATOR_CONFIG
+from utilities.orchestrator.gemini_call import call_gemini
 from utilities.orchestrator.persistence import persist_simple_lens_result
 
 logger = logging.getLogger(__name__)
@@ -340,7 +340,6 @@ def _parse_position_change(text: str) -> Optional[float]:
 def call_simple_lens(
     transaction: dict,
     company_profile: dict,
-    client,
     config: Optional[dict] = None,
 ) -> tuple[dict, dict]:
     """
@@ -353,8 +352,6 @@ def call_simple_lens(
     company_profile : dict
         Company profile from get_company_profile() or universe_companies.
         Pass {} if not available — prompt will show "Unknown" for missing fields.
-    client : anthropic.Anthropic
-        Anthropic API client.
     config : dict, optional
         Orchestrator config. Uses ORCHESTRATOR_CONFIG defaults if None.
 
@@ -370,22 +367,11 @@ def call_simple_lens(
     prompt = build_simple_lens_prompt(transaction, company_profile)
 
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        text, token_usage = call_gemini(prompt, model)
     except Exception as e:
         logger.error("Simple lens API call failed: %s", e)
         return _empty_result(error=str(e)), {"input": 0, "output": 0, "model": model}
 
-    token_usage = {
-        "input": response.usage.input_tokens,
-        "output": response.usage.output_tokens,
-        "model": model,
-    }
-
-    text = response.content[0].text if response.content else ""
     result = parse_simple_lens_response(text)
 
     logger.info(
@@ -426,7 +412,6 @@ def run_simple_lens(
     rns_article_id: str,
     transaction: dict,
     company_profile: dict,
-    client,
     db=None,
     config: Optional[dict] = None,
 ) -> tuple[dict, dict]:
@@ -447,8 +432,6 @@ def run_simple_lens(
         company_name, transaction_category, transaction_date_reported.
     company_profile : dict
         Company profile from get_company_profile(). Pass {} if unavailable.
-    client : anthropic.Anthropic
-        Anthropic API client.
     db : Firestore client, optional
     config : dict, optional
 
@@ -464,7 +447,7 @@ def run_simple_lens(
     The caller proceeds to run the agentic investigation (Stage 3+) and
     update the document when complete.
     """
-    result, token_usage = call_simple_lens(transaction, company_profile, client, config)
+    result, token_usage = call_simple_lens(transaction, company_profile, config)
 
     signal_type = (
         "director_buying"

@@ -42,6 +42,7 @@ if not _creds_path or not os.path.exists(_creds_path):
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _frontend_creds
 
 from utilities.orchestrator.config import ORCHESTRATOR_CONFIG
+from utilities.orchestrator.gemini_call import call_gemini
 from utilities.orchestrator.persistence import (
     persist_tr1_signal,
     update_agentic_status,
@@ -269,17 +270,6 @@ def call_tr1_simple_lens(
     Returns (result, token_usage). On API failure, returns a safe empty
     result with _parse_error set.
     """
-    api_key = os.environ.get("GEMINI_KEY", "")
-    if not api_key:
-        return _empty_result(error="GEMINI_KEY not set"), {"input": 0, "output": 0, "model": _MODEL}
-
-    try:
-        from google import genai
-    except ImportError:
-        return _empty_result(error="google-genai package not installed"), {
-            "input": 0, "output": 0, "model": _MODEL
-        }
-
     notifier_name = tr1_data.get("notifier_name") or ""
     if _is_mechanical_holder(notifier_name):
         logger.info(
@@ -299,17 +289,11 @@ def call_tr1_simple_lens(
     prompt = build_tr1_simple_lens_prompt(tr1_data, company_profile)
 
     try:
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=_MODEL,
-            contents=prompt,
-        )
+        text, token_usage = call_gemini(prompt, _MODEL)
     except Exception as e:
         logger.error("TR-1 simple lens API call failed: %s", e)
         return _empty_result(error=str(e)), {"input": 0, "output": 0, "model": _MODEL}
 
-    token_usage = _extract_token_usage(response)
-    text = response.text or ""
     result = parse_tr1_simple_lens_response(text)
 
     logger.info(
@@ -322,18 +306,6 @@ def call_tr1_simple_lens(
     )
 
     return result, token_usage
-
-
-def _extract_token_usage(response) -> dict:
-    try:
-        usage = response.usage_metadata
-        return {
-            "input": getattr(usage, "prompt_token_count", 0) or 0,
-            "output": getattr(usage, "candidates_token_count", 0) or 0,
-            "model": _MODEL,
-        }
-    except Exception:
-        return {"input": 0, "output": 0, "model": _MODEL}
 
 
 # ---------------------------------------------------------------------------
