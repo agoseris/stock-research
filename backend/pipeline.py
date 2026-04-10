@@ -405,9 +405,8 @@ REASON: [one sentence]"""
             r["lens_id"]        = "regulatory_catalyst"
             r["recommendation"] = recommendation
             r["signal_strength"] = classify_catalyst_strength(action_raw, relevance_raw)
-            if recommendation in ("act", "monitor"):
-                priority = "high" if recommendation == "act" else "normal"
-                self.notifier.send(self.notifier.format_unified_signal(r), priority=priority)
+            if recommendation == "act" and r["signal_strength"] not in ("weak", "noise"):
+                self.notifier.send(self.notifier.format_unified_signal(r), priority="high")
 
         for r in discovery_results:
             disc_assessment = r.get("discovery_assessment", "")
