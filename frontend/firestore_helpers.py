@@ -155,8 +155,12 @@ def delete_signal_result(db, doc_id: str) -> None:
 @st.cache_data(ttl=60, show_spinner=False)
 def get_director_signals(_db, limit: int = 200) -> list:
     """
-    Fetch director lens signals from the signals collection, newest first.
+    Fetch director/TR-1 signals from the signals collection, newest first.
     Returns list of (doc_id, data_dict) tuples.
+
+    Enriched fields from signals_unified (same doc_ids) are merged onto each
+    dict under _unified_* keys so the UI can display proposal-agent values
+    (recommendation, signal_maturity, etc.) without touching the primary write path.
     """
     try:
         docs = (
@@ -165,10 +169,37 @@ def get_director_signals(_db, limit: int = 200) -> list:
             .limit(limit)
             .stream()
         )
-        return [(doc.id, doc.to_dict()) for doc in docs]
+        results = [(doc.id, doc.to_dict()) for doc in docs]
     except Exception as e:
         logger.warning("get_director_signals failed — returning empty list. Error: %s", e)
         return []
+
+    if not results:
+        return results
+
+    # Batch-read the corresponding signals_unified docs (same doc_ids) and
+    # merge enriched fields so the card renderer can use proposal-agent values.
+    try:
+        refs = [_db.collection(_COL_SIGNALS_UNIFIED).document(doc_id) for doc_id, _ in results]
+        unified_snaps = _db.get_all(refs)
+        unified_map = {snap.id: snap.to_dict() for snap in unified_snaps if snap.exists}
+        merged = []
+        for doc_id, data in results:
+            u = unified_map.get(doc_id) or {}
+            if u:
+                data = {
+                    **data,
+                    "_unified_recommendation":    u.get("recommendation"),
+                    "_unified_signal_maturity":   u.get("signal_maturity"),
+                    "_unified_signal_strength":   u.get("signal_strength"),
+                    "_unified_disq_refs":         u.get("disqualification_refs") or [],
+                    "_unified_active_lens_count": u.get("active_lens_count_at_fire", 0),
+                }
+            merged.append((doc_id, data))
+        return merged
+    except Exception as e:
+        logger.warning("get_director_signals unified merge failed: %s", e)
+        return results
 
 
 def delete_director_signal(db, doc_id: str) -> None:

@@ -364,6 +364,17 @@ def _tr1_conviction_badge(conviction: str | None) -> str:
     return '<span class="badge badge-tr1-unclear">Unclear</span>'
 
 
+def _signal_maturity_badge(maturity: str | None, disq_refs: list) -> str:
+    """Badge showing first_signal / reinforced maturity from proposal agent."""
+    if disq_refs:
+        return '<span class="badge badge-tr1-ignore" title="Downgraded: prior risk flag detected">⚠ Downgraded</span>'
+    if maturity == "reinforced":
+        return '<span class="badge badge-state-reinforced" title="A prior qualifying signal exists for this ticker in the last 30 days">🔁 Reinforced</span>'
+    if maturity == "first_signal":
+        return '<span class="badge badge-state-watching" title="No prior signals for this ticker in the last 30 days">First Signal</span>'
+    return ""
+
+
 def _fmt_pct(val) -> str:
     """Format a holding percentage float as e.g. '4.85%' or '—'."""
     if val is None:
@@ -392,8 +403,13 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
     threshold      = signal.get("threshold_crossed")
 
     simple         = signal.get("simple_lens_result") or {}
-    recommendation = simple.get("recommendation") or "Ignore"
-    signal_str     = (simple.get("signal_strength") or "").replace("_", " ").title()
+    # Prefer proposal-agent enriched values from signals_unified when available
+    unified_rec     = signal.get("_unified_recommendation")
+    unified_maturity = signal.get("_unified_signal_maturity")
+    unified_disq    = signal.get("_unified_disq_refs") or []
+    unified_str     = signal.get("_unified_signal_strength")
+    legacy_rec      = simple.get("recommendation") or "Ignore"
+    signal_str      = (unified_str or simple.get("signal_strength") or "").replace("_", " ").title()
 
     agentic_status = signal.get("agentic_status") or "pending"
     inv_research   = signal.get("investor_research") or {}
@@ -404,7 +420,13 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
     pos_state = (company.get("position_state") or "").strip()
     sig_age   = format_signal_age(company.get("signal_state_since"))
 
-    card_class  = f"signal-card-compact {_tr1_card_class(recommendation)}"
+    # Card class: use unified rec if available, fall back to legacy
+    if unified_rec:
+        _, card_css = recommended_action_badge_unified(unified_rec)
+        card_class = f"signal-card-compact {card_css}"
+    else:
+        card_class = f"signal-card-compact {_tr1_card_class(legacy_rec)}"
+
     state_badge = signal_state_badge(sig_state, sig_age)
     pos_badge   = position_state_badge(pos_state)
 
@@ -415,7 +437,12 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
     market_str = f"{mkt_label} &nbsp;·&nbsp; {price_html}" if price_html != "—" else mkt_label
 
     direction_badge  = _tr1_direction_badge(direction, threshold)
-    rec_badge        = _tr1_rec_badge(recommendation)
+    # Unified rec badge (⬆ Action / ◉ Monitor) takes priority over legacy Investigate/Monitor/Ignore
+    if unified_rec:
+        rec_badge, _ = recommended_action_badge_unified(unified_rec)
+    else:
+        rec_badge = _tr1_rec_badge(legacy_rec)
+    maturity_badge   = _signal_maturity_badge(unified_maturity, unified_disq)
     notifier_t_badge = _tr1_notifier_type_badge(notifier_type)
     conviction_badge = _tr1_conviction_badge(conviction)
 
@@ -449,7 +476,7 @@ def _render_tr1_signal_card(doc_id: str, signal: dict, company: dict, db) -> Non
         f'Holdings: {holding_str}</div>'
         f'<div class="card-meta">{pub_display}</div>'
         f'<div class="card-badges">'
-        f'{direction_badge}{rec_badge}{str_badge}'
+        f'{direction_badge}{rec_badge}{maturity_badge}{str_badge}'
         f'{notifier_t_badge}{conviction_badge}'
         f'{state_badge}{pos_badge}'
         f'</div>'
