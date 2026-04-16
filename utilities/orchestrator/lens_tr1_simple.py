@@ -128,8 +128,8 @@ def build_tr1_simple_lens_prompt(tr1_data: dict, company_profile: dict) -> str:
     return f"""You are an investment research analyst assessing an LSE Significant \
 Shareholder (TR-1) notification.
 
-Your task is to classify the signal strength of this threshold crossing and \
-determine whether it warrants further investigation of the notifier's identity.
+Your task is to classify the notifier, assess signal strength, and determine \
+whether it warrants further investigation.
 
 IMPORTANT: You cannot determine investor identity from the filing alone. \
 The trigger_investor_research field delegates that to a separate research \
@@ -147,54 +147,82 @@ Threshold crossed:           {threshold_str}
 Nature of holding:           {nature}
 Crossing date:               {crossing_date}
 
-SIGNAL STRENGTH CLASSIFICATION:
-Assess signal_strength as exactly one of:
+STEP 1 — NOTIFIER CATEGORY:
+Classify the notifier as exactly one of:
 
-- "strong": Upward crossing. Notifier name suggests a fund, asset manager,
-  activist, or private investor (not a custody bank or index fund). The
-  crossing initiates a new position (old_pct < 3%, new_pct >= 3%) or
-  represents a material increment above an existing position.
+- "active_manager": Named fund, asset manager, activist investor, or family
+  office with a visible investment mandate. Examples: Saba Capital, Cobas
+  Asset Management, Gresham House, Artemis, Fulcrum Asset Management,
+  Van Eck, Frasers Group, Aberforth, Herald Investment Management.
+  Max signal_strength allowed: "strong". Max recommendation allowed: "Investigate".
 
-- "moderate": Upward crossing. Notifier is unclassified or ambiguous (name
-  does not clearly identify fund type). Modest increment above an existing
-  position. Cannot rule out conviction buying.
+- "passive_custody": Custody bank, index fund provider, ETF issuer, or
+  passive manager. Examples: BlackRock (index arm), Vanguard, State Street,
+  JPMorgan Chase (custody), Deutsche Bank, UBS prime brokerage.
+  Max signal_strength allowed: "noise". Max recommendation allowed: "Ignore".
 
-- "weak": Upward crossing BUT driven by passive mechanics — share issuance,
+- "named_individual": A real person's name with no corporate wrapper (likely
+  a PDMR, major shareholder, or founder). Examples: "John Smith", "Dr. Jane
+  Williams". This is not a nominee or SPV.
+  Max signal_strength allowed: "strong". Max recommendation allowed: "Investigate".
+
+- "opaque": Nominee company, generic corporate entity, non-specific SPV, or
+  any name that does not clearly indicate the beneficial owner's investment
+  style. Examples: "Rock Nominees Limited", "XYZ Holdings Ltd", "ABC Capital
+  (Nominees)".
+  Max signal_strength allowed: "moderate". Max recommendation allowed: "Monitor".
+
+CRITICAL RULE: If you are uncertain whether the notifier is an active investor,
+you MUST classify as "opaque". Uncertainty is not evidence of conviction —
+opacity should reduce confidence, not leave it unchanged.
+
+STEP 2 — SIGNAL STRENGTH CLASSIFICATION:
+Assess signal_strength as exactly one of (subject to the category cap above):
+
+- "strong": Upward crossing. Notifier is an identified active manager or named
+  individual. Crossing initiates a new position (old_pct < 3%, new_pct >= 3%)
+  or represents a material increment above an existing position.
+
+- "moderate": Upward crossing. Notifier is opaque/unclassified, OR a modest
+  increment above an existing position by an active manager.
+
+- "weak": Upward crossing driven by passive mechanics — share issuance,
   corporate action, or nature_of_holding indicates derivative/pledge rather
   than open-market purchase. Or: minimal increment suggesting index rebalancing.
 
-- "noise": Downward crossing caused by corporate action, OR notifier is
-  clearly a custody bank, index fund, ETF provider, or passive manager.
+- "noise": Downward crossing caused by corporate action, OR notifier is a
+  passive/custody holder.
 
-- "negative": Downward crossing where the notifier is clearly a known
-  investment fund (not passive), especially if dropping below a threshold
-  (e.g. below 5% or exiting entirely below 3%).
+- "negative": Downward crossing where the notifier is a known active investment
+  fund, especially dropping below a threshold or exiting entirely.
 
-TRIGGER INVESTOR RESEARCH:
+STEP 3 — TRIGGER INVESTOR RESEARCH:
 Set trigger_investor_research to true when:
   - direction is "upward" AND
-  - signal_strength is "strong" or "moderate" AND
-  - notifier_name does NOT clearly identify a custody bank, index fund,
-    or passive manager
+  - signal_strength (after applying category cap) is "strong" or "moderate" AND
+  - notifier_category is NOT "passive_custody"
 
 Set trigger_investor_research to false for all other cases.
 
 RESPOND IN EXACTLY THIS JSON FORMAT — no preamble, no markdown fences:
 
 {{
+  "notifier_category": "active_manager|passive_custody|named_individual|opaque",
   "signal_strength": "strong|moderate|weak|noise|negative",
   "direction": "upward|downward|unknown",
   "threshold_crossed": {threshold if threshold is not None else "null"},
   "recommendation": "Investigate|Monitor|Ignore",
-  "rationale": "2-3 sentence explanation of your assessment",
+  "rationale": "2-3 sentence explanation including why you chose this notifier category",
   "trigger_investor_research": true,
   "limitations": "what cannot be assessed without knowing investor identity"
 }}
 
-Recommendation mapping:
+Recommendation mapping (after applying category cap):
   strong or moderate + upward → "Investigate"
   weak + upward → "Monitor"
   noise, negative, or downward → "Ignore"
+  opaque category cap → maximum "Monitor" (never "Investigate")
+  passive_custody category cap → always "Ignore"
 """
 
 
@@ -232,6 +260,9 @@ def parse_tr1_simple_lens_response(text: str) -> dict:
         ["strong", "moderate", "weak", "noise", "negative"]
     )
     _VALID_RECOMMENDATIONS = frozenset(["Investigate", "Monitor", "Ignore"])
+    _VALID_CATEGORIES = frozenset(
+        ["active_manager", "passive_custody", "named_individual", "opaque"]
+    )
 
     if result.get("signal_strength") not in _VALID_STRENGTHS:
         result["signal_strength"] = "noise"
@@ -240,11 +271,28 @@ def parse_tr1_simple_lens_response(text: str) -> dict:
     if not isinstance(result.get("trigger_investor_research"), bool):
         result["trigger_investor_research"] = False
 
+    # Validate and default notifier_category; enforce caps
+    category = result.get("notifier_category")
+    if category not in _VALID_CATEGORIES:
+        category = "opaque"
+    result["notifier_category"] = category
+
+    if category == "passive_custody":
+        result["signal_strength"] = "noise"
+        result["recommendation"] = "Ignore"
+        result["trigger_investor_research"] = False
+    elif category == "opaque":
+        if result["signal_strength"] == "strong":
+            result["signal_strength"] = "moderate"
+        if result["recommendation"] == "Investigate":
+            result["recommendation"] = "Monitor"
+
     return result
 
 
 def _empty_result(error: str = "") -> dict:
     return {
+        "notifier_category": "opaque",
         "signal_strength": "noise",
         "direction": "unknown",
         "threshold_crossed": None,
@@ -277,6 +325,7 @@ def call_tr1_simple_lens(
             tr1_data.get("ticker", ""),
         )
         return {
+            "notifier_category": "passive_custody",
             "signal_strength": "noise",
             "direction": tr1_data.get("direction") or "unknown",
             "threshold_crossed": tr1_data.get("threshold_crossed"),
