@@ -177,6 +177,54 @@ def count_active_lenses(recent_signals: list[dict], current_signal_id: str) -> i
 
 
 # ---------------------------------------------------------------------------
+# TR-1 compounding check (spec §3.4)
+# ---------------------------------------------------------------------------
+
+_QUALIFYING_CATEGORIES: frozenset[str] = frozenset(["active_manager", "named_individual"])
+
+
+def check_tr1_compounding(
+    recent_signals: list[dict],
+    current_signal_id: str,
+    current_notifier_name: str | None,
+    current_notifier_category: str | None,
+) -> bool:
+    """
+    Return True if TR-1 repeat-signal compounding conditions are met (spec §3.4).
+
+    Conditions (all must hold):
+    1. Current notifier is active_manager or named_individual.
+    2. At least one prior tr1_accumulation signal exists for the same ticker
+       in the lookback window.
+    3. That prior signal's notifier_category is also active_manager or
+       named_individual.
+    4. The prior notifier name is distinct from the current notifier name
+       (case-insensitive).
+
+    The "same active manager crossing a higher threshold" variant is not
+    implemented here — that requires threshold comparison data not reliably
+    available at enrichment time.
+    """
+    if current_notifier_category not in _QUALIFYING_CATEGORIES:
+        return False
+
+    current_name = (current_notifier_name or "").lower().strip()
+
+    for data in recent_signals:
+        if data.get("_doc_id") == current_signal_id:
+            continue
+        if data.get("lens_id") != "tr1_accumulation":
+            continue
+        if data.get("notifier_category") not in _QUALIFYING_CATEGORIES:
+            continue
+        prior_name = ((data.get("lens_data") or {}).get("notifier_name") or "").lower().strip()
+        if prior_name and prior_name != current_name:
+            return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -186,6 +234,9 @@ def enrich_signal(
     ticker: str,
     recommendation: str,
     lookback_days: int = _LOOKBACK_DAYS,
+    lens_id: str | None = None,
+    notifier_name: str | None = None,
+    notifier_category: str | None = None,
 ) -> dict:
     """
     Enrich a just-saved signal with maturity, disqualification, and lens count.
@@ -193,6 +244,10 @@ def enrich_signal(
     Queries recent signals for the same ticker, applies disqualification
     (act → monitor if a keyword match is found), computes maturity, and
     writes the enriched fields back to signals_unified via merge.
+
+    Optional TR-1 compounding (spec §3.4): if lens_id is "tr1_accumulation"
+    and compounding conditions are met, signal_maturity is set to "reinforced"
+    and signal_strength is upgraded to "strong".
 
     Returns a dict of enriched fields safe to merge into the notification
     payload:
@@ -202,6 +257,7 @@ def enrich_signal(
             "reinforcement_refs":        list,
             "disqualification_refs":     list,
             "active_lens_count_at_fire": int,
+            # signal_strength included only when TR-1 compounding upgrades it
         }
     """
     recent = _recent_ticker_signals(db, ticker, lookback_days)
@@ -212,11 +268,12 @@ def enrich_signal(
 
     disqualification_refs = [h["signal_id"] for h in disq_hits]
     final_recommendation  = recommendation
+    compounding_upgrade   = False
 
     if disq_hits and recommendation == "act":
         final_recommendation = "monitor"
-        kw      = disq_hits[0]["keyword_matched"]
-        ref_id  = disq_hits[0]["signal_id"][:16]
+        kw     = disq_hits[0]["keyword_matched"]
+        ref_id = disq_hits[0]["signal_id"][:16]
         logger.info(
             "proposal_agent: [%s] downgraded act→monitor — prior signal %s matched '%s'",
             ticker, ref_id, kw,
@@ -226,14 +283,25 @@ def enrich_signal(
     if disq_hits:
         maturity = "first_signal"
         reinforcement_refs = []
+    elif lens_id == "tr1_accumulation" and not disq_hits:
+        # TR-1 compounding: two distinct qualifying notifiers → force reinforced + strong
+        if check_tr1_compounding(recent, signal_id, notifier_name, notifier_category):
+            maturity = "reinforced"
+            compounding_upgrade = True
+            logger.info(
+                "proposal_agent: [%s] TR-1 compounding — upgrading to reinforced/strong",
+                ticker,
+            )
 
-    firestore_fields = {
+    firestore_fields: dict = {
         "recommendation":            final_recommendation,
         "signal_maturity":           maturity,
         "reinforcement_refs":        reinforcement_refs,
         "disqualification_refs":     disqualification_refs,
         "active_lens_count_at_fire": active_count,
     }
+    if compounding_upgrade:
+        firestore_fields["signal_strength"] = "strong"
 
     try:
         db.collection(_SIGNALS_UNIFIED).document(signal_id).set(firestore_fields, merge=True)

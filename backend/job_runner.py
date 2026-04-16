@@ -453,12 +453,15 @@ REASON: [one sentence]"""
                 now=datetime.now(timezone.utc),
             )
 
-            # Proposal agent enrichment — disqualification + maturity
+            # Proposal agent enrichment — disqualification + maturity + compounding
             recommendation = _map_tr1_recommendation(
                 simple_result.get("recommendation", "")
             )
             enriched = enrich_signal(
-                self.db, rns_article_id, ticker, recommendation
+                self.db, rns_article_id, ticker, recommendation,
+                lens_id="tr1_accumulation",
+                notifier_name=tr1_data.get("notifier_name"),
+                notifier_category=simple_result.get("notifier_category"),
             )
             tr1_signal_payload = {
                 **tr1_data,
@@ -468,7 +471,7 @@ REASON: [one sentence]"""
                 "simple_lens_result": simple_result,
                 "lens_id": "tr1_accumulation",
                 "signal_strength": strength,
-                **enriched,  # may override recommendation if downgraded
+                **enriched,  # may override recommendation or signal_strength
             }
             self._notify_tr1_signal(tr1_signal_payload)
 
