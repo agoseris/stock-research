@@ -13,8 +13,8 @@ Eligible signals
     simple_lens_result.recommendation in ("investigate", "monitor")
     investor_action != "dismissed"
 
-  signal_results collection (regulatory_catalyst):
-    signal_strength in ("strong", "moderate")
+  signals_unified collection (regulatory_catalyst):
+    recommendation in ("act", "monitor")
     dismissed != True
 
 Snapshot windows
@@ -66,7 +66,7 @@ from google.cloud import firestore  # noqa: E402
 # ---------------------------------------------------------------------------
 
 COLLECTION_SIGNALS        = "signals"
-COLLECTION_SIGNAL_RESULTS = "signal_results"
+COLLECTION_SIGNAL_RESULTS = "signals_unified"
 COLLECTION_PERFORMANCE    = "signal_performance"
 COLLECTION_UNIVERSE       = "universe_companies"
 
@@ -235,34 +235,18 @@ def _eligible_signal(data: dict) -> bool:
     return rec.startswith("investigate") or rec.startswith("monitor")
 
 
-def _parse_recommended_action(llm_analysis: str) -> str:
-    """
-    Extract RECOMMENDED_ACTION from raw LLM analysis text.
-    Returns 'yes', 'monitor', or 'no' (default).
-    """
-    for line in (llm_analysis or "").splitlines():
-        if "RECOMMENDED_ACTION" in line.upper():
-            val = line.split(":", 1)[-1].strip().lower()
-            if val.startswith("yes"):
-                return "yes"
-            if val.startswith("monitor"):
-                return "monitor"
-            return "no"
-    return "no"
-
 
 def _eligible_signal_result(data: dict) -> bool:
     """
-    Is a doc from signal_results eligible for performance tracking?
+    Is a doc from signals_unified eligible for performance tracking?
 
-    signal_results docs do not store signal_strength — that is only written
-    to the signal_history subcollection by pipeline.py. Eligibility is
-    determined by parsing RECOMMENDED_ACTION from the raw llm_analysis text.
+    The unified schema stores recommendation as a discrete field
+    ("act", "monitor", "ignore").
     """
     if data.get("dismissed", False):
         return False
-    action = _parse_recommended_action(data.get("llm_analysis") or "")
-    return action in ("yes", "monitor")
+    rec = (data.get("recommendation") or "").lower()
+    return rec in ("act", "monitor")
 
 
 # ---------------------------------------------------------------------------
@@ -435,9 +419,9 @@ def _process_signal(
                       or "")
         rec        = _raw_rec.split()[0].lower() if _raw_rec else ""
     else:
-        lens_type  = "regulatory_catalyst"
+        lens_type  = data.get("lens_id") or "regulatory_catalyst"
         strength   = data.get("signal_strength") or ""
-        rec        = _parse_recommended_action(data.get("llm_analysis") or "")
+        rec        = (data.get("recommendation") or "").lower()
 
     # Existing performance doc
     existing = existing_perf.get(doc_id, {})
@@ -595,24 +579,28 @@ def run(dry_run: bool, ticker_filter: str | None, debug: bool = False) -> None:
             existing_perf, universe_map, db, dry_run, stats,
         )
 
-    # --- signal_results collection (regulatory_catalyst) ---
-    print(f"\nScanning {COLLECTION_SIGNAL_RESULTS}...")
-    sr_docs = list(db.collection(COLLECTION_SIGNAL_RESULTS).stream())
+    # --- signals_unified collection (regulatory_catalyst) ---
+    print(f"\nScanning {COLLECTION_SIGNAL_RESULTS} (lens_id=regulatory_catalyst)...")
+    sr_docs = list(
+        db.collection(COLLECTION_SIGNAL_RESULTS)
+        .where("lens_id", "==", "regulatory_catalyst")
+        .stream()
+    )
     print(f"  {len(sr_docs)} total documents")
 
     if debug:
         from collections import Counter
-        sr_action_counts: Counter = Counter()
+        sr_rec_counts: Counter = Counter()
         sr_dismissed = 0
         for doc in sr_docs:
             d = doc.to_dict() or {}
             if d.get("dismissed", False):
                 sr_dismissed += 1
-            action = _parse_recommended_action(d.get("llm_analysis") or "")
-            sr_action_counts[action] += 1
+            rec = (d.get("recommendation") or "—").lower()
+            sr_rec_counts[rec] += 1
         print(f"  dismissed: {sr_dismissed}")
-        print(f"  RECOMMENDED_ACTION breakdown:")
-        for k, v in sorted(sr_action_counts.items()):
+        print(f"  recommendation breakdown:")
+        for k, v in sorted(sr_rec_counts.items()):
             print(f"    {k}: {v}")
 
     for doc in sr_docs:
