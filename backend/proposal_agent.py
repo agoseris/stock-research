@@ -1,0 +1,245 @@
+"""
+proposal_agent.py
+
+Post-classification enrichment layer. Called immediately after a signal is
+saved to signals_unified and before the Telegram notification is dispatched.
+
+Responsibilities (spec §3.1, §3.2, §3.5):
+1. Cross-lens disqualification (§3.2) — query the last 30 days of signals
+   for the same ticker; if any match a disqualification keyword in their
+   summary or signal_type, downgrade act → monitor and record the refs.
+2. Signal maturity classification (§3.1) — first_signal vs reinforced, based
+   on whether a prior qualifying signal exists for this ticker in the window.
+3. Active lens count snapshot (§3.5) — number of distinct lenses with
+   non-ignore signals in the window at time of firing.
+
+No LLM calls — fully deterministic.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+_SIGNALS_UNIFIED = "signals_unified"
+_LOOKBACK_DAYS = 30
+
+# ---------------------------------------------------------------------------
+# Disqualification keywords (spec §3.2)
+# ---------------------------------------------------------------------------
+
+DISQUALIFICATION_KEYWORDS: frozenset[str] = frozenset([
+    "suspension",
+    "suspended",
+    "investigation",
+    "delay in results",
+    "delayed results",
+    "going concern",
+    "material uncertainty",
+    "placing",
+    "equity raise",
+    "open offer",
+    "rescue financing",
+    "covenant breach",
+    "restatement",
+    "auditor resign",
+    "qualified opinion",
+    "board investigation",
+    "profit warning",
+])
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _to_datetime(val: Any) -> datetime | None:
+    """Convert a Firestore Timestamp, datetime, or ISO string to UTC-aware datetime."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    try:
+        s = str(val).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _recent_ticker_signals(db, ticker: str, lookback_days: int = _LOOKBACK_DAYS) -> list[dict]:
+    """
+    Return all non-dismissed signals_unified docs for this ticker in the
+    lookback window, keyed with _doc_id.
+
+    Date filtering is done in Python to handle the mixed string/timestamp
+    stored_at schema (regulatory catalyst stores ISO strings; TR-1 and
+    director store Firestore timestamps).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    try:
+        docs = (
+            db.collection(_SIGNALS_UNIFIED)
+            .where("ticker", "==", ticker)
+            .where("dismissed", "==", False)
+            .stream()
+        )
+        results = []
+        for doc in docs:
+            data = doc.to_dict() or {}
+            stored_at = _to_datetime(data.get("stored_at"))
+            if stored_at and stored_at >= cutoff:
+                data["_doc_id"] = doc.id
+                results.append(data)
+        return results
+    except Exception as e:
+        logger.warning("proposal_agent: query failed for ticker=%s: %s", ticker, e)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Core checks
+# ---------------------------------------------------------------------------
+
+def check_disqualification(
+    recent_signals: list[dict],
+    current_signal_id: str,
+) -> list[dict]:
+    """
+    Scan prior signals for disqualification keywords in summary or signal_type.
+
+    Returns a list of hit dicts — one per matching prior signal:
+        {signal_id, keyword_matched, stored_at, summary_snippet}
+
+    The current signal is excluded from the check.
+    """
+    hits = []
+    for data in recent_signals:
+        doc_id = data.get("_doc_id", "")
+        if doc_id == current_signal_id:
+            continue
+        text = " ".join([
+            (data.get("summary") or "").lower(),
+            (data.get("signal_type") or "").lower(),
+        ])
+        for keyword in DISQUALIFICATION_KEYWORDS:
+            if keyword in text:
+                summary = data.get("summary") or ""
+                hits.append({
+                    "signal_id":      doc_id,
+                    "keyword_matched": keyword,
+                    "stored_at":      str(data.get("stored_at", "")),
+                    "summary_snippet": summary[:120],
+                })
+                break  # one hit per prior signal is sufficient
+    return hits
+
+
+def compute_signal_maturity(
+    recent_signals: list[dict],
+    current_signal_id: str,
+) -> tuple[str, list[str]]:
+    """
+    Classify signal maturity as 'reinforced' or 'first_signal'.
+
+    A signal is reinforced if at least one prior non-dismissed signal for the
+    same ticker exists at act or monitor level within the lookback window.
+    Noise/ignore signals do not count (spec §3.1).
+
+    Returns ("reinforced", [prior_signal_ids]) or ("first_signal", []).
+    """
+    qualifying_prior = [
+        data["_doc_id"]
+        for data in recent_signals
+        if data.get("_doc_id") != current_signal_id
+        and (data.get("recommendation") or "").lower() in ("act", "monitor")
+    ]
+    if qualifying_prior:
+        return "reinforced", qualifying_prior
+    return "first_signal", []
+
+
+def count_active_lenses(recent_signals: list[dict], current_signal_id: str) -> int:
+    """
+    Count distinct lens_id values with non-ignore signals in the lookback window.
+    Includes the current signal if it is among the recent signals.
+    """
+    lens_ids = {
+        data["lens_id"]
+        for data in recent_signals
+        if (data.get("recommendation") or "").lower() in ("act", "monitor")
+        and data.get("lens_id")
+    }
+    return len(lens_ids)
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator
+# ---------------------------------------------------------------------------
+
+def enrich_signal(
+    db,
+    signal_id: str,
+    ticker: str,
+    recommendation: str,
+    lookback_days: int = _LOOKBACK_DAYS,
+) -> dict:
+    """
+    Enrich a just-saved signal with maturity, disqualification, and lens count.
+
+    Queries recent signals for the same ticker, applies disqualification
+    (act → monitor if a keyword match is found), computes maturity, and
+    writes the enriched fields back to signals_unified via merge.
+
+    Returns a dict of enriched fields safe to merge into the notification
+    payload:
+        {
+            "recommendation":            str,   # possibly downgraded from "act"
+            "signal_maturity":           str,   # "first_signal" | "reinforced"
+            "reinforcement_refs":        list,
+            "disqualification_refs":     list,
+            "active_lens_count_at_fire": int,
+        }
+    """
+    recent = _recent_ticker_signals(db, ticker, lookback_days)
+
+    disq_hits    = check_disqualification(recent, signal_id)
+    maturity, reinforcement_refs = compute_signal_maturity(recent, signal_id)
+    active_count = count_active_lenses(recent, signal_id)
+
+    disqualification_refs = [h["signal_id"] for h in disq_hits]
+    final_recommendation  = recommendation
+
+    if disq_hits and recommendation == "act":
+        final_recommendation = "monitor"
+        kw      = disq_hits[0]["keyword_matched"]
+        ref_id  = disq_hits[0]["signal_id"][:16]
+        logger.info(
+            "proposal_agent: [%s] downgraded act→monitor — prior signal %s matched '%s'",
+            ticker, ref_id, kw,
+        )
+
+    # A disqualified signal is not positively reinforced
+    if disq_hits:
+        maturity = "first_signal"
+        reinforcement_refs = []
+
+    enriched = {
+        "recommendation":            final_recommendation,
+        "signal_maturity":           maturity,
+        "reinforcement_refs":        reinforcement_refs,
+        "disqualification_refs":     disqualification_refs,
+        "active_lens_count_at_fire": active_count,
+    }
+
+    try:
+        db.collection(_SIGNALS_UNIFIED).document(signal_id).set(enriched, merge=True)
+    except Exception as e:
+        logger.warning(
+            "proposal_agent: Firestore write failed for signal %s: %s", signal_id[:16], e
+        )
+
+    return enriched

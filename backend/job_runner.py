@@ -67,6 +67,7 @@ from storage_firestore import (
 )
 from storage_firestore_universe import FirestoreUniverseProvider
 from telegram_notifier import TelegramNotifier
+from proposal_agent import enrich_signal
 
 
 POLL_INTERVAL = 10  # seconds between Firestore polls
@@ -347,9 +348,12 @@ REASON: [one sentence]"""
                     now=now,
                 )
 
-                # Telegram notification — 'act' threshold only
+                # Proposal agent enrichment — disqualification + maturity
                 recommendation = _map_director_recommendation(
                     simple_result.get("RECOMMENDED_ACTION", "")
+                )
+                enriched = enrich_signal(
+                    self.db, rns_article_id, ticker, recommendation
                 )
                 notification_payload = {
                     **simple_result,
@@ -360,7 +364,7 @@ REASON: [one sentence]"""
                     "announcement_published_at": str(announcement.published_at),
                     "lens_id": "director_purchasing",
                     "signal_strength": signal_strength,
-                    "recommendation": recommendation,
+                    **enriched,  # may override recommendation if downgraded
                 }
                 self._notify_director_signal(notification_payload)
 
@@ -449,9 +453,12 @@ REASON: [one sentence]"""
                 now=datetime.now(timezone.utc),
             )
 
-            # Telegram notification — 'act' threshold only
+            # Proposal agent enrichment — disqualification + maturity
             recommendation = _map_tr1_recommendation(
                 simple_result.get("recommendation", "")
+            )
+            enriched = enrich_signal(
+                self.db, rns_article_id, ticker, recommendation
             )
             tr1_signal_payload = {
                 **tr1_data,
@@ -461,7 +468,7 @@ REASON: [one sentence]"""
                 "simple_lens_result": simple_result,
                 "lens_id": "tr1_accumulation",
                 "signal_strength": strength,
-                "recommendation": recommendation,
+                **enriched,  # may override recommendation if downgraded
             }
             self._notify_tr1_signal(tr1_signal_payload)
 
@@ -479,10 +486,12 @@ REASON: [one sentence]"""
         analysis      = result.get("llm_analysis", "")
         action_raw    = extract_catalyst_field(analysis, "RECOMMENDED_ACTION")
         relevance_raw = extract_catalyst_field(analysis, "RELEVANCE")
-        recommendation = map_catalyst_recommendation(action_raw)
         result["lens_id"]         = "regulatory_catalyst"
-        result["recommendation"]  = recommendation
         result["signal_strength"] = classify_catalyst_strength(action_raw, relevance_raw)
+        # Use pre-enriched recommendation if already set (proposal_agent may have downgraded it)
+        if not result.get("recommendation"):
+            result["recommendation"] = map_catalyst_recommendation(action_raw)
+        recommendation = result["recommendation"]
         if recommendation in ("act", "monitor"):
             priority = "high" if recommendation == "act" else "normal"
             self.notifier.send(self.notifier.format_unified_signal(result), priority=priority)
@@ -881,8 +890,15 @@ REASON: [one sentence]"""
                     company = self.universe_storage.get_company(ticker)
                     if company:
                         result["market_cap_gbp"] = company.market_cap_gbp
-                    self.storage.save_signal_result(result)
+                    signal_id = self.storage.save_signal_result(result)
                     self._apply_state_transition(announcement, result, now)
+                    if signal_id:
+                        ticker_rc = announcement.ticker
+                        rec_rc = result.get("recommendation") or map_catalyst_recommendation(
+                            extract_catalyst_field(result.get("llm_analysis", ""), "RECOMMENDED_ACTION")
+                        )
+                        enriched = enrich_signal(self.db, signal_id, ticker_rc, rec_rc)
+                        result = {**result, **enriched}
                     self._notify_signal(result)
                     self._complete_job(job_id)
                     print(f"  [{ticker}] Signal result saved.")

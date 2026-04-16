@@ -272,22 +272,24 @@ class FirestoreProvider(StorageProviderBase):
         }
         return unified_id, unified_doc
 
-    def save_signal_result(self, result: dict) -> bool:
+    def save_signal_result(self, result: dict) -> str | None:
         """
         Persist a regulatory catalyst signal result to signals_unified.
         Parses the llm_analysis blob and writes a normalised unified document.
         Document ID is a fingerprint of source_url (or headline), ensuring
         idempotent writes — re-processing the same announcement overwrites
         the existing document rather than creating a duplicate.
+
+        Returns the document ID (unified_id) on success, or None on failure.
         """
         try:
             now = datetime.now(timezone.utc)
             unified_id, unified_doc = self._build_unified_catalyst_doc(result, now)
             self.db.collection(self.SIGNALS_UNIFIED_COLLECTION).document(unified_id).set(unified_doc)
-            return True
+            return unified_id
         except Exception as e:
             print(f"  [Firestore] save_signal_result failed: {e}")
-            return False
+            return None
 
     def get_signal_results(self, limit: int = 50) -> List[dict]:
         """
