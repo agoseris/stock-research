@@ -96,7 +96,9 @@ def _recent_ticker_signals(db, ticker: str, lookback_days: int = _LOOKBACK_DAYS)
                 results.append(data)
         return results
     except Exception as e:
-        logger.warning("proposal_agent: query failed for ticker=%s: %s", ticker, e)
+        msg = f"  [proposal_agent] query failed for ticker={ticker}: {e}"
+        print(msg)
+        logger.warning(msg)
         return []
 
 
