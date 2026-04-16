@@ -59,14 +59,37 @@ class TelegramNotifier(NotificationProviderBase):
           - recommendation "act" | "monitor" | "ignore"
           - signal_strength "strong" | "substantial" | "moderate" | "weak" | "noise"
 
+        Optional enrichment fields from proposal_agent (if present):
+          - signal_maturity           "first_signal" | "reinforced"
+          - reinforcement_refs        list of prior signal IDs
+          - disqualification_refs     list of disqualifying signal IDs
+          - disqualification_detail   dict with keyword_matched, stored_at
+          - active_lens_count_at_fire int
+
         The body is delegated to a per-lens method.
         """
         lens_id  = result.get("lens_id", "")
         emoji, label = _LENS_LABELS.get(lens_id, ("🔔", "SIGNAL"))
         ticker   = result.get("ticker", "Unknown")
-        action   = (result.get("recommendation") or "unknown").upper()
+        rec      = (result.get("recommendation") or "unknown").lower()
         strength = (result.get("signal_strength") or "unknown").upper()
-        title    = f"{emoji} *{label} | {ticker} | {action} | {strength}*\n\n"
+        maturity = result.get("signal_maturity")  # may be None for legacy signals
+
+        # Title: tier indicator for act recommendations
+        if rec == "act" and maturity == "reinforced":
+            tier_prefix = "🟢🟢"
+            action_label = "ACT (reinforced)"
+        elif rec == "act" and maturity == "first_signal":
+            tier_prefix = "🟢"
+            action_label = "ACT (first signal)"
+        elif rec == "act":
+            tier_prefix = "🟢"
+            action_label = "ACT"
+        else:
+            tier_prefix = emoji
+            action_label = rec.upper()
+
+        title = f"{tier_prefix} *{label} | {ticker} | {action_label} | {strength}*\n\n"
 
         if lens_id == "director_purchasing":
             body = self._format_director_body(result)
@@ -75,7 +98,42 @@ class TelegramNotifier(NotificationProviderBase):
         else:
             body = self._format_catalyst_body(result)
 
-        return title + body
+        footer = self._format_signal_footer(result)
+
+        return title + body + footer
+
+    def _format_signal_footer(self, result: dict) -> str:
+        """
+        Append enrichment context lines below the per-lens body.
+
+        Renders:
+        - Reinforcement note (for reinforced signals)
+        - Downgrade note (if disqualification triggered)
+        - Active lens count (if > 1)
+        """
+        lines = []
+        maturity = result.get("signal_maturity")
+        disq_detail = result.get("disqualification_detail")
+        active_count = result.get("active_lens_count_at_fire", 0)
+        reinforcement_refs = result.get("reinforcement_refs") or []
+
+        if disq_detail:
+            kw   = disq_detail.get("keyword_matched", "risk flag")
+            date = (disq_detail.get("stored_at") or "")[:10] or "prior"
+            lines.append(
+                f"\n⚠️ *Downgraded act→monitor:* prior signal {date} flagged '{kw}' risk."
+            )
+        elif maturity == "reinforced" and reinforcement_refs:
+            count = len(reinforcement_refs)
+            lines.append(
+                f"\n🔁 *Reinforced:* {count} prior qualifying signal{'s' if count > 1 else ''} "
+                f"in the last 30 days."
+            )
+
+        if active_count > 1:
+            lines.append(f"📊 *Active lenses:* {active_count}")
+
+        return "\n" + "\n".join(lines) if lines else ""
 
     # ------------------------------------------------------------------
     # Per-lens body formatters (title excluded)

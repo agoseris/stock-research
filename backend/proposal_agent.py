@@ -227,7 +227,7 @@ def enrich_signal(
         maturity = "first_signal"
         reinforcement_refs = []
 
-    enriched = {
+    firestore_fields = {
         "recommendation":            final_recommendation,
         "signal_maturity":           maturity,
         "reinforcement_refs":        reinforcement_refs,
@@ -236,10 +236,14 @@ def enrich_signal(
     }
 
     try:
-        db.collection(_SIGNALS_UNIFIED).document(signal_id).set(enriched, merge=True)
+        db.collection(_SIGNALS_UNIFIED).document(signal_id).set(firestore_fields, merge=True)
     except Exception as e:
         logger.warning(
             "proposal_agent: Firestore write failed for signal %s: %s", signal_id[:16], e
         )
 
-    return enriched
+    # disqualification_detail is passed to the notification payload only — not persisted
+    return {
+        **firestore_fields,
+        "disqualification_detail": disq_hits[0] if disq_hits else None,
+    }
