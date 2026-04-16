@@ -331,6 +331,12 @@ def _build_unified_director_doc(
         "dismissed": False,
         "agentic_status": "pending",
         "expires_at": _expires_at(SIGNAL_TTL_DAYS),
+        # Signal quality fields — populated by proposal_agent.py after save
+        "signal_maturity":           "first_signal",
+        "reinforcement_refs":        [],
+        "disqualification_refs":     [],
+        "notifier_category":         None,
+        "active_lens_count_at_fire": 0,
         "lens_data": {
             "simple_transaction_nature": simple_result.get("TRANSACTION_NATURE"),
             "simple_position_change_pct": simple_result.get("POSITION_CHANGE_PCT"),
@@ -392,6 +398,12 @@ def _build_unified_tr1_doc(
         "dismissed": False,
         "agentic_status": "pending",
         "expires_at": _expires_at(SIGNAL_TTL_DAYS),
+        # Signal quality fields — populated by proposal_agent.py after save
+        "signal_maturity":           "first_signal",
+        "reinforcement_refs":        [],
+        "disqualification_refs":     [],
+        "notifier_category":         None,
+        "active_lens_count_at_fire": 0,
         "lens_data": {
             **tr1_extraction_fields,
             "simple_lens_result": simple_result,

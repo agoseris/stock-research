@@ -254,6 +254,12 @@ class FirestoreProvider(StorageProviderBase):
             "price_pence":      result.get("price_pence"),
             "price_change":     result.get("price_change"),
             "market_cap_gbp":   result.get("market_cap_gbp"),
+            # Signal quality fields — populated by proposal_agent.py after save
+            "signal_maturity":           "first_signal",
+            "reinforcement_refs":        [],
+            "disqualification_refs":     [],
+            "notifier_category":         None,
+            "active_lens_count_at_fire": 0,
             "lens_data": {
                 "analysed_at":       result.get("analysed_at", now.isoformat()),
                 "lens":              result.get("lens", "regulatory_catalyst"),
