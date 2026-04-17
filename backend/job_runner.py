@@ -302,6 +302,10 @@ REASON: [one sentence]"""
 
         company = self.universe_storage.get_company(ticker)
         company_profile = _build_company_profile(company)
+        # Director buying is a secondary signal — only reinforces existing primary signals.
+        # If the ticker is in 'watching' state, record the signal but don't advance state
+        # or send a Telegram notification; there is no primary signal to corroborate.
+        initial_state = (company.signal_state if company else None) or "watching"
 
         # Store announcement metadata on the signals doc for UI display.
         # Written once per filing (same rns_article_id for all transactions).
@@ -316,9 +320,6 @@ REASON: [one sentence]"""
         except Exception as e:
             print(f"  [{ticker}] Could not store announcement metadata on signals doc: {e}")
 
-        cfg = self._get_director_lens_config()
-        skip_on_ignore = cfg.get("skip_agentic_on_ignore", True)
-        min_consideration = cfg.get("agentic_min_consideration_gbp", 0)
         now = datetime.now(timezone.utc)
 
         for tx in open_market_txs:
@@ -336,51 +337,42 @@ REASON: [one sentence]"""
                 rec = simple_result.get("RECOMMENDED_ACTION", "unknown")
                 print(f"  [{ticker}] Simple lens: {rec} (director: {director})")
 
-                # State machine — Director lens
                 strength_int = simple_result.get("SIGNAL_STRENGTH")
                 signal_strength = int_strength_to_unified(strength_int)
-                self._apply_state_transition_unified(
-                    ticker=ticker,
-                    signal_strength=signal_strength,
-                    source_url=announcement.source_url or "",
-                    headline=announcement.headline or "",
-                    lens_id="director_purchasing",
-                    now=now,
-                )
 
-                # Proposal agent enrichment — disqualification + maturity
-                recommendation = _map_director_recommendation(
-                    simple_result.get("RECOMMENDED_ACTION", "")
-                )
-                enriched = enrich_signal(
-                    self.db, rns_article_id, ticker, recommendation
-                )
-                notification_payload = {
-                    **simple_result,
-                    "ticker": ticker,
-                    "company_name": announcement.company_name,
-                    "headline": announcement.headline,
-                    "source_url": announcement.source_url,
-                    "announcement_published_at": str(announcement.published_at),
-                    "lens_id": "director_purchasing",
-                    "signal_strength": signal_strength,
-                    **enriched,  # may override recommendation if downgraded
-                }
-                self._notify_director_signal(notification_payload)
-
-                # Materiality gate — override agentic_status to "skipped" if:
-                #   1. Simple lens recommends Ignore, or
-                #   2. Consideration is below the configured floor
-                consideration = tx.get("total_consideration_gbp") or 0
-                gated_ignore = skip_on_ignore and rec == "Ignore"
-                gated_floor = min_consideration > 0 and consideration < min_consideration
-                if gated_ignore or gated_floor:
-                    reason = "simple_lens_ignore" if gated_ignore else f"below_floor_£{min_consideration:,.0f}"
-                    update_agentic_status(rns_article_id, "skipped", db=self.db)
-                    print(f"  [{ticker}] Agentic skipped ({reason}) — "
-                          f"consideration=£{consideration:,.0f}")
+                if initial_state == "watching":
+                    # No existing primary signal — record for UI but take no action
+                    print(f"  [{ticker}] Director signal: state=watching — recorded as secondary, no state change")
                 else:
-                    print(f"  [{ticker}] Agentic queued — consideration=£{consideration:,.0f}")
+                    # Corroborate existing primary signal — apply state transition + notify
+                    self._apply_state_transition_unified(
+                        ticker=ticker,
+                        signal_strength=signal_strength,
+                        source_url=announcement.source_url or "",
+                        headline=announcement.headline or "",
+                        lens_id="director_purchasing",
+                        now=now,
+                    )
+
+                    recommendation = _map_director_recommendation(
+                        simple_result.get("RECOMMENDED_ACTION", "")
+                    )
+                    enriched = enrich_signal(
+                        self.db, rns_article_id, ticker, recommendation
+                    )
+                    notification_payload = {
+                        **simple_result,
+                        "ticker": ticker,
+                        "company_name": announcement.company_name,
+                        "headline": announcement.headline,
+                        "source_url": announcement.source_url,
+                        "announcement_published_at": str(announcement.published_at),
+                        "lens_id": "director_purchasing",
+                        "signal_strength": signal_strength,
+                        **enriched,  # may override recommendation if downgraded
+                    }
+                    self._notify_director_signal(notification_payload)
+                    print(f"  [{ticker}] Director signal: corroborates state={initial_state}")
 
             except Exception as e:
                 print(f"  [{ticker}] Simple lens failed for {director}: {e}")

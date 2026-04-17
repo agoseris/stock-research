@@ -465,8 +465,18 @@ def run(sequential: bool = False, once: bool = False) -> None:
                         if signal_type == "tr1_crossing":
                             process_tr1_signal(db, doc.id, signal_data)
                         elif signal_type in ("director_buying", "director_disposal", ""):
-                            # Empty signal_type: backwards-compatible — treat as director
-                            process_signal(db, client, doc.id, signal_data, sequential=sequential)
+                            # Director buying is now a secondary/corroborating signal.
+                            # Agentic investigation is removed — simple lens assessment is sufficient.
+                            ticker = signal_data.get("ticker", "UNKNOWN")
+                            logger.info(
+                                "[%s] Director signal: secondary role — skipping agentic investigation.",
+                                ticker,
+                            )
+                            db.collection("signals").document(doc.id).set(
+                                {"agentic_status": "skipped",
+                                 "agentic_synthesis_error": "director_secondary_signal"},
+                                merge=True,
+                            )
                         else:
                             logger.warning(
                                 "Unknown signal_type %r on signal %s — skipping.",

@@ -329,7 +329,7 @@ def _build_unified_director_doc(
         "limitations": simple_result.get("LIMITATIONS", ""),
         "confidence_signal": "",
         "dismissed": False,
-        "agentic_status": "pending",
+        "agentic_status": "skipped",
         "expires_at": _expires_at(SIGNAL_TTL_DAYS),
         # Signal quality fields — populated by proposal_agent.py after save
         "signal_maturity":           "first_signal",
@@ -620,8 +620,8 @@ def persist_simple_lens_result(
         "simple_recommended_action": simple_result.get("RECOMMENDED_ACTION"),
         "simple_limitations": simple_result.get("LIMITATIONS"),
         "simple_summary": simple_result.get("SUMMARY"),
-        # Agentic status — pending until Stage 3+ completes
-        "agentic_status": "pending",
+        # Director buying is a secondary/corroborating signal — no agentic investigation
+        "agentic_status": "skipped",
         # Investor decision — pending until human acts
         "investor_action": "pending",
         # Housekeeping
