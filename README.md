@@ -14,7 +14,141 @@ A system that monitors regulatory announcements on the London Stock Exchange, cl
 
 ## Architecture
 
-![System architecture](docs/architecture.svg)
+```mermaid
+graph TD
+    subgraph EXT_DATA["<b>External Data Sources</b>"]
+        LSEG["LSEG RNS Feed"]
+        YFINANCE["Yahoo Finance"]
+    end
+
+    subgraph EXT_API["<b>External APIs</b>"]
+        ANTHROPIC["Anthropic API<br/><i>Claude Sonnet · Haiku</i>"]
+        GEMINI["Google Gemini API<br/><i>2.0 Flash</i>"]
+        GSEARCH["Google Search<br/>Grounding"]
+    end
+
+    subgraph LOCAL["<b>Local - WSL2 on residential hardware</b>"]
+        direction TB
+
+        SCRAPER["RNS Scraper<br/><i>Playwright · hourly 07:30-19:30</i>"]
+
+        subgraph LOCAL_ORCH["Agentic Investigation<br/><i>hourly :50 · residential IP for yfinance</i>"]
+            direction LR
+            DIR_AGENTIC["Director Purchasing<br/>— Agentic<br/><i>Claude Haiku + Sonnet</i><br/>3 layers · 13 tools"]
+            TR1_RESEARCH["TR-1 Investor<br/>Research<br/><i>Gemini + Search</i>"]
+            SYNTHESIS["Agentic Synthesis<br/><i>Claude Sonnet</i>"]
+        end
+
+        INDEX_SNAP["Index Snapshot<br/><i>daily 17:00 UTC</i>"]
+        PERF_SNAP["Signal Performance<br/><i>daily 18:00 UTC</i>"]
+        STREAMLIT["Streamlit Interface<br/><i>Signal review · position management<br/>Ingest · Discovery · Universe · Config</i>"]
+    end
+
+    subgraph GCP["<b>GCP - europe-west2 - e2-micro VM</b>"]
+        direction TB
+
+        JOB_RUNNER["Job Runner<br/><i>systemd · polls every 10s</i>"]
+
+        subgraph CLASSIFICATION["Classification"]
+            CLASSIFIER["Article Classifier<br/><i>Claude Sonnet</i><br/>pdmr · tr1 · regulatory · admin"]
+        end
+
+        subgraph SIMPLE_LENSES["Simple Lenses — one-shot baseline"]
+            direction LR
+            REG["Regulatory<br/>Catalyst<br/><i>Gemini Flash</i>"]
+            DIR_SIMPLE["Director Purchasing<br/>— Baseline<br/><i>Gemini Flash</i>"]
+            TR1_SIMPLE["TR-1<br/>Accumulation<br/><i>Gemini Flash</i>"]
+        end
+
+        PROPOSAL["Proposal Agent<br/><i>Deterministic — no LLM</i><br/>Cross-lens disqualification<br/>Signal maturity · Compounding"]
+
+        STATE["Signal State Machine<br/><i>Deterministic transitions</i><br/>watching / monitor / active / reinforced<br/>Time-based decay"]
+
+        FIRESTORE[("Cloud Firestore<br/><i>Native mode</i><br/>signals_unified · universe<br/>signal_history · pending_jobs")]
+
+        TELEGRAM["Telegram Notifier<br/><i>Two-tier ACT alerts</i>"]
+    end
+
+    subgraph EXT_DEST["<b>External Destinations</b>"]
+        TG_USER["Telegram"]
+    end
+
+    %% ── Ingestion flow ──
+    LSEG -- "GET · residential IP" --> SCRAPER
+    SCRAPER -- "submits jobs" --> FIRESTORE
+    YFINANCE -- "price data · residential IP" --> DIR_AGENTIC
+    YFINANCE -- "price snapshots" --> INDEX_SNAP
+    YFINANCE -- "return data" --> PERF_SNAP
+
+    %% ── Job processing ──
+    FIRESTORE -- "pending_jobs" --> JOB_RUNNER
+    JOB_RUNNER -- "on new job" --> CLASSIFIER
+
+    %% ── Classification → simple lenses (GCP) ──
+    CLASSIFIER -- "regulatory" --> REG
+    CLASSIFIER -- "pdmr" --> DIR_SIMPLE
+    CLASSIFIER -- "tr1" --> TR1_SIMPLE
+
+    %% ── Simple lens LLM calls ──
+    CLASSIFIER -. "API call" .-> ANTHROPIC
+    REG -. "API call" .-> GEMINI
+    DIR_SIMPLE -. "API call" .-> GEMINI
+    TR1_SIMPLE -. "API call" .-> GEMINI
+
+    %% ── Simple lens persistence ──
+    REG -- "on analysis" --> FIRESTORE
+    DIR_SIMPLE -- "on analysis" --> FIRESTORE
+    TR1_SIMPLE -- "on analysis" --> FIRESTORE
+
+    %% ── Agentic investigation (local, claims pending signals from Firestore) ──
+    FIRESTORE -- "pending agentic signals" --> DIR_AGENTIC
+    FIRESTORE -- "pending agentic signals" --> TR1_RESEARCH
+    DIR_AGENTIC -- "3 layer outputs" --> SYNTHESIS
+    SYNTHESIS -- "enriched result" --> FIRESTORE
+    TR1_RESEARCH -- "investor classification" --> FIRESTORE
+
+    %% ── Agentic LLM calls ──
+    DIR_AGENTIC -. "tool-use loop" .-> ANTHROPIC
+    TR1_RESEARCH -. "investor lookup" .-> GSEARCH
+    TR1_RESEARCH -. "API call" .-> GEMINI
+    SYNTHESIS -. "API call" .-> ANTHROPIC
+
+    %% ── Post-save enrichment ──
+    FIRESTORE -- "on signal save" --> PROPOSAL
+    PROPOSAL -- "enriched signal" --> FIRESTORE
+    PROPOSAL -- "state transition" --> STATE
+    STATE -- "append-only history" --> FIRESTORE
+
+    %% ── Notifications ──
+    PROPOSAL -- "act or reinforced" --> TELEGRAM
+    TELEGRAM --> TG_USER
+
+    %% ── Streamlit reads ──
+    FIRESTORE -- "read-only queries" --> STREAMLIT
+
+    %% ── Performance tracking ──
+    INDEX_SNAP -- "index snapshots" --> FIRESTORE
+    PERF_SNAP -- "price snapshots" --> FIRESTORE
+
+    %% ── Styling ──
+    classDef local fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#1e3a5f
+    classDef gcp fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#78350f
+    classDef ext fill:#f1f5f9,stroke:#94a3b8,stroke-width:1px,color:#475569
+    classDef store fill:#fed7aa,stroke:#c2410c,stroke-width:2px,color:#7c2d12
+    classDef lens fill:#d1fae5,stroke:#059669,stroke-width:1px,color:#064e3b
+    classDef agentic fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#4c1d95
+
+    class SCRAPER,INDEX_SNAP,PERF_SNAP,STREAMLIT local
+    class JOB_RUNNER,CLASSIFIER,PROPOSAL,STATE,TELEGRAM gcp
+    class REG,DIR_SIMPLE,TR1_SIMPLE lens
+    class DIR_AGENTIC,TR1_RESEARCH,SYNTHESIS agentic
+    class FIRESTORE store
+    class LSEG,YFINANCE,ANTHROPIC,GEMINI,GSEARCH,TG_USER ext
+```
+
+### Deployment topology
+
+The system runs across two locations by design. **Local (WSL2 on residential hardware)** hosts web-scraping ingestion, the agentic investigation layers, and the Streamlit interface. LSEG and Yahoo Finance reliably block or rate-limit requests from cloud IP ranges, and the agentic director lens requires yfinance price data for its 13-tool investigation — so anything that touches external data sources runs locally. Streamlit runs locally to avoid the access-control overhead of exposing it through GCP. **GCP (europe-west2, e2-micro)** hosts the always-on job runner, article classification, one-shot simple lenses, signal state management, and Telegram dispatch. The two halves communicate exclusively through Firestore: the local scraper writes jobs, the VM classifies and runs simple lenses, the local orchestrator claims pending signals for deeper agentic work, and the local UI reads the results.
 
 ## Why this is interesting
 
