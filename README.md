@@ -23,8 +23,8 @@ graph TD
 
     subgraph EXT_API["<b>External APIs</b>"]
         ANTHROPIC["Anthropic API<br/><i>Claude Sonnet · Haiku</i>"]
-        GEMINI["Google Gemini API<br/><i>2.0 Flash</i>"]
         GSEARCH["Google Search<br/>Grounding"]
+        GEMINI["Google Gemini API<br/><i>2.0 Flash</i>"]
     end
 
     subgraph LOCAL["<b>Local - WSL2 on residential hardware</b>"]
