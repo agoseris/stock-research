@@ -185,6 +185,7 @@ A pure state machine (`signal_state.py`) governs transitions: watching → monit
 ### Notifications
 
 Telegram alerts use a two-tier format: `ACT (first signal)` for initial recommendations, `ACT (reinforced)` when corroborated by subsequent signals. Alerts include the lens source, signal strength, maturity tier, and any disqualification notes. Position state (acted, deferred, declined) is managed through the Streamlit interface.
+
 ![Telegram notification view](docs/screenshots/telegram-notification-sample.png)
 
 ### Interface
