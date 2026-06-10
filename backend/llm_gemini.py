@@ -19,7 +19,7 @@ class GeminiProvider(LLMProviderBase):
     Implements LLMProviderBase so this can be swapped for any other
     provider without changing the rest of the system."""
 
-    MODEL = "gemini-2.0-flash"
+    MODEL = "gemini-2.5-flash"
 
     def __init__(self):
         api_key = os.getenv("GEMINI_KEY")
