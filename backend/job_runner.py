@@ -487,7 +487,7 @@ REASON: [one sentence]"""
         if not result.get("recommendation"):
             result["recommendation"] = map_catalyst_recommendation(action_raw)
         recommendation = result["recommendation"]
-        if recommendation in ("act", "monitor"):
+        if recommendation in ("act", "monitor") and result["signal_strength"] not in ("weak", "noise"):
             priority = "high" if recommendation == "act" else "normal"
             self.notifier.send(self.notifier.format_unified_signal(result), priority=priority)
 
@@ -607,7 +607,7 @@ REASON: [one sentence]"""
 
     def _notify_director_signal(self, result: dict) -> None:
         """Send Telegram notification for a Director purchasing signal if recommendation is 'act'."""
-        if result.get("recommendation") == "act":
+        if result.get("recommendation") == "act" and result.get("signal_strength") not in ("weak", "noise"):
             try:
                 self.notifier.send(
                     self.notifier.format_unified_signal(result),
@@ -619,7 +619,7 @@ REASON: [one sentence]"""
 
     def _notify_tr1_signal(self, result: dict) -> None:
         """Send Telegram notification for a TR-1 crossing signal if recommendation is 'act'."""
-        if result.get("recommendation") == "act":
+        if result.get("recommendation") == "act" and result.get("signal_strength") not in ("weak", "noise"):
             try:
                 self.notifier.send(
                     self.notifier.format_unified_signal(result),
